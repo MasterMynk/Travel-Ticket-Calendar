@@ -29,7 +29,7 @@ All options are optional. If [REQUIRED] options are not specified or are specifi
 --arrival='YYYY-MM-DD HH:MM:SS' or --arrival='YYYY-MM-DD HH:MM:SS+HH:MM': [REQUIRED] Specifies the ending date and time of your journey along with utc offset if necessary.'''
 
 
-def init_service(user_creds_file='token.json'):
+def init_service(user_creds_file: str = 'token.json'):
     creds = None
 
     if os.path.exists('token.json'):
@@ -52,11 +52,11 @@ def init_service(user_creds_file='token.json'):
 
 def get_date_time_interactive(verb: str) -> Callable[[], datetime]:
     def logic():
-        def ensure_input(code):
+        def ensure_input(code: Callable[[], int]) -> int:
             while True:
                 try:
                     data = code()
-                except ValueError as e:
+                except ValueError:
                     print(f'Please enter an integer only!!')
                 else:
                     return data
@@ -70,7 +70,6 @@ def get_date_time_interactive(verb: str) -> Callable[[], datetime]:
         minute = ensure_input(lambda: int(
             input(f'Enter the minute of {verb}: ')))
 
-        # TODO: Do more error checking while creating datetime object
         try:
             return datetime(year, month, date, hour, minute).astimezone()
         except ValueError as e:
