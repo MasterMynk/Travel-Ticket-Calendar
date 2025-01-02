@@ -15,8 +15,12 @@ from googleapiclient.errors import HttpError
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
-ARRIVAL_DEPARTURE_ERR_MSG = '''--{0} value specified incorrectly.
+ARRIVAL_DEPARTURE_INCORRECT_ERR_MSG = '''--{0} value specified incorrectly.
 Correct format is YYYY-MM-DD HH:MM:SS and optionally YYYY-MM-DD HH:MM:SS+HH:MM to specify timezone.
+Enter your {0} date and time:'''
+ARRIVAL_DEPARTURE_MISSING_ERR_MSG = '''Date and time value for --{0} missing.
+You can specify it with --{0}='YYYY-MM-DD HH:MM:SS' or --{0}='YYYY-MM-DD HH:MM:SS+HH:MM' to specify timezone
+or specify it by doing --{0} 'YYYY-MM-DD HH:MM:SS' or --{0} 'YYYY-MM-DD HH:MM:SS+HH:MM'
 Enter your {0} date and time:'''
 
 HELP_MSG = f'''Script to create an event on google calendar regarding your travel bookings.
@@ -50,40 +54,42 @@ def init_service(user_creds_file: str = 'token.json'):
     return build('calendar', 'v3', credentials=creds)
 
 
-def get_date_time_interactive(verb: str) -> Callable[[], datetime]:
-    def logic():
-        def ensure_input(code: Callable[[], int]) -> int:
-            while True:
-                try:
-                    data = code()
-                except ValueError:
-                    print(f'Please enter an integer only!!')
-                else:
-                    return data
+def get_date_time_interactive(verb: str) -> datetime | NoReturn:
+    # TODO: Add default values in logical places
+    def ensure_input(code: Callable[[], int]) -> int:
+        while True:
+            try:
+                data = code()
+            except ValueError:
+                print(f'Please enter an integer only!!')
+            else:
+                return data
 
-        year = ensure_input(lambda: int(input(f'Enter year of {verb}: ')))
-        month = ensure_input(lambda: int(
-            input(f'Enter the number of the month of {verb} [1 for January and so on]: ')))
-        date = ensure_input(lambda: int(input(f'Enter the date: ')))
-        hour = ensure_input(lambda: int(
-            input(f'Enter the hour of {verb} in 24-hour format: ')))
-        minute = ensure_input(lambda: int(
-            input(f'Enter the minute of {verb}: ')))
+    year = ensure_input(lambda: int(input(f'Enter year of {verb}: ')))
+    month = ensure_input(lambda: int(
+        input(f'Enter the number of the month of {verb} [1 for January and so on]: ')))
+    date = ensure_input(lambda: int(input(f'Enter the date: ')))
+    hour = ensure_input(lambda: int(
+        input(f'Enter the hour of {verb} in 24-hour format: ')))
+    minute = ensure_input(lambda: int(
+        input(f'Enter the minute of {verb}: ')))
 
-        try:
-            return datetime(year, month, date, hour, minute).astimezone()
-        except ValueError as e:
-            print(f'Ivalid date entered: {e}. Exiting...')
-            exit(1)
-    return logic
+    try:
+        return datetime(year, month, date, hour, minute).astimezone()
+    # TODO: Think about if this deserves quitting the program or trying forever
+    except ValueError as e:
+        print(f'Ivalid date entered: {e}. Exiting...')
+        exit(1)
 
 
 class ValuefulFlag:
     _T = TypeVar('_T')
 
-    def __init__(self, name: str, err_msg: str, interactive_getter: Callable[[], _T]):
+    def __init__(self, name: str, value_err_msg: str, missing_err_msg: str, with_data: Callable[[str], _T], interactive_getter: Callable[[], _T]):
         self.flag_name = f'--{name}'
-        self.err_msg = err_msg
+        self.value_err_msg = value_err_msg
+        self.missing_err_msg = missing_err_msg
+        self.with_data = with_data
         self.interactive_getter = interactive_getter
         self.value: self._T | None = None
 
@@ -97,32 +103,65 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
     valueful_flags: list[ValuefulFlag] = [
         ValuefulFlag(
             name='departure',
-            err_msg=ARRIVAL_DEPARTURE_ERR_MSG.format('departure'),
-            interactive_getter=get_date_time_interactive('departure')
+            value_err_msg=ARRIVAL_DEPARTURE_INCORRECT_ERR_MSG.format(
+                'departure'),
+            missing_err_msg=ARRIVAL_DEPARTURE_MISSING_ERR_MSG.format(
+                'departure'),
+            with_data=lambda data: datetime.fromisoformat(data).astimezone(),
+            interactive_getter=lambda: get_date_time_interactive('departure')
         ),
         ValuefulFlag(
             name='arrival',
-            err_msg=ARRIVAL_DEPARTURE_ERR_MSG.format('arrival'),
-            interactive_getter=get_date_time_interactive('arrival')
+            value_err_msg=ARRIVAL_DEPARTURE_INCORRECT_ERR_MSG.format(
+                'arrival'),
+            missing_err_msg=ARRIVAL_DEPARTURE_MISSING_ERR_MSG.format(
+                'arrival'),
+            with_data=lambda data: datetime.fromisoformat(data).astimezone(),
+            interactive_getter=lambda: get_date_time_interactive('arrival')
         ),
     ]
 
+    next_accounted_for = False
     for i, arg in enumerate(args):
-        # TODO: Add option to interpret --flag value
-        # TODO: Do some checks to see data is correct
-        # TODO: See if you can move common functionality between arrival and departure into a function
         # TODO: If the travel mode is specified then 'Enter your arrival/departure' date and time should be replaced by respective transport vehicle
         # TODO: Instead of specifying departure date time, give user the option to specify journey duration
 
+        is_valid_arg = False
+
+        if next_accounted_for:
+            next_accounted_for = False
+            continue
+
         for flag in valueful_flags:
-            if arg.startswith(flag.flag_name + '='):
+            if arg.startswith(flag.flag_name):
+                is_valid_arg = True
                 try:
-                    flag.value = datetime.fromisoformat(
-                        arg[len(flag.flag_name) + 1:]).astimezone()
+                    # Value specified as --departure '2025-01-14'
+                    if len(arg) == len(flag.flag_name):
+                        # Cases where the flag is given but not its value
+                        if len(args) - 1 <= i or args[i + 1].startswith('--'):
+                            print(flag.missing_err_msg)
+                            flag.value = flag.interactive_getter()
+                        else:
+                            next_accounted_for = True
+                            flag.value = flag.with_data(args[i + 1])
+                    # Value specified as --departure='2025-01-14'
+                    elif arg[len(flag.flag_name)] == '=':
+                        flag.value = flag.with_data(
+                            arg[len(flag.flag_name) + 1:])
+                    # Some garbled value like --departure2025-01
+                    else:
+                        print(f'Unrecognized option: {arg}. Exiting...')
+                        exit(-1)
+                # This ValueError will only occur when the specified data is garbled
                 except ValueError:
-                    print(flag.err_msg)
+                    print(flag.value_err_msg)
                     flag.value = flag.interactive_getter()
                 break
+
+        if not is_valid_arg:
+            print(f'Unrecognized option: {arg}. Exiting...')
+            exit(-1)
 
     for flag in valueful_flags:
         if not flag.value:
