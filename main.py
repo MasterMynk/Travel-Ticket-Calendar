@@ -4,6 +4,8 @@
 import os.path
 import sys
 from datetime import datetime
+from collections.abc import Callable
+from typing import TypeVar
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -35,22 +37,62 @@ def init_service(user_creds_file='token.json'):
     return build('calendar', 'v3', credentials=creds)
 
 
-def get_date_time_interactive(verb):
-    # TODO: Add error checking
-    year = int(input(f'Enter year of {verb}: '))
-    month = int(
-        input(f'Enter the number of the month of {verb} [1 for January and so on]: '))
-    date = int(input(f'Enter the date: '))
-    hour = int(input(f'Enter the hour of {verb} in 24-hour format: '))
-    minute = int(input(f'Enter the minute of {verb}: '))
+def get_date_time_interactive(verb: str) -> Callable[[], datetime]:
+    def logic():
+        def ensure_input(code):
+            while True:
+                try:
+                    data = code()
+                except ValueError as e:
+                    print(f'Please enter an integer only!!')
+                else:
+                    return data
 
-    # TODO: Do more error checking while creating datetime object
-    return datetime(year, month, date, hour, minute).astimezone()
+        year = ensure_input(lambda: int(input(f'Enter year of {verb}: ')))
+        month = ensure_input(lambda: int(
+            input(f'Enter the number of the month of {verb} [1 for January and so on]: ')))
+        date = ensure_input(lambda: int(input(f'Enter the date: ')))
+        hour = ensure_input(lambda: int(
+            input(f'Enter the hour of {verb} in 24-hour format: ')))
+        minute = ensure_input(lambda: int(
+            input(f'Enter the minute of {verb}: ')))
+
+        # TODO: Do more error checking while creating datetime object
+        try:
+            return datetime(year, month, date, hour, minute).astimezone()
+        except ValueError as e:
+            print(f'Ivalid date entered: {e}. Exiting...')
+            exit(1)
+    return logic
 
 
-def parse_args(args):
-    departure = None
-    arrival = None
+class ValuefulFlag:
+    _T = TypeVar('_T')
+
+    def __init__(self, name: str, err_msg: str, interactive_getter: Callable[[], _T]):
+        self.flag_name = f'--{name}'
+        self.err_msg = err_msg
+        self.interactive_getter = interactive_getter
+        self.value: self._T | None = None
+
+
+def parse_args(args) -> tuple[datetime, datetime]:
+    ARRIVAL_DEPARTURE_ERR_MSG = '''--{0} value specified incorrectly.
+Correct format is YYYY-MM-DD HH:MM:SS and optionally YYYY-MM-DD HH:MM:SS+HH:MM to specify timezone.
+Enter your {0} date and time:'''
+
+    valueful_flags: list[ValuefulFlag] = [
+        ValuefulFlag(
+            name='departure',
+            err_msg=ARRIVAL_DEPARTURE_ERR_MSG.format('departure'),
+            interactive_getter=get_date_time_interactive('departure')
+        ),
+        ValuefulFlag(
+            name='arrival',
+            err_msg=ARRIVAL_DEPARTURE_ERR_MSG.format('arrival'),
+            interactive_getter=get_date_time_interactive('arrival')
+        ),
+    ]
 
     for i, arg in enumerate(args):
         # TODO: Add option to interpret --flag value
@@ -59,33 +101,21 @@ def parse_args(args):
         # TODO: If the travel mode is specified then 'Enter your arrival/departure' date and time should be replaced by respective transport vehicle
         # TODO: Instead of specifying departure date time, give user the option to specify journey duration
 
-        if arg.startswith('--departure='):
-            try:
-                departure = datetime.fromisoformat(arg[12:]).astimezone()
-            except ValueError:
-                print(
-                    f'''--departure value specified incorrectly.
-Correct format is YYYY-MM-DD HH:MM:SS and optionally YYYY-MM-DD HH:MM:SS+HH:MM to specify timezone.
-Enter your departure date and time:'''
-                )
-                departure = get_date_time_interactive(verb='departure')
-        elif arg.startswith('--arrival='):
-            try:
-                arrival = datetime.fromisoformat(arg[10:]).astimezone()
-            except ValueError:
-                print(
-                    f'''--arrival value specified incorrectly.
-Correct format is YYYY-MM-DD HH:MM:SS and optionally YYYY-MM-DD HH:MM:SS+HH:MM to specify timezone.
-Enter your arrival date and time:'''
-                )
-                arrival = get_date_time_interactive(verb='arrival')
+        for flag in valueful_flags:
+            if arg.startswith(flag.flag_name + '='):
+                try:
+                    flag.value = datetime.fromisoformat(
+                        arg[len(flag.flag_name) + 1:]).astimezone()
+                except ValueError:
+                    print(flag.err_msg)
+                    flag.value = flag.interactive_getter()
+                break
 
-    if not departure:
-        departure = get_date_time_interactive('departure')
-    if not arrival:
-        arrival = get_date_time_interactive('arrival')
+    for flag in valueful_flags:
+        if not flag.value:
+            flag.value = flag.interactive_getter()
 
-    return departure, arrival
+    return map(lambda flag: flag.value, valueful_flags)
 
 
 def main():
