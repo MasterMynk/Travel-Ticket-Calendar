@@ -36,7 +36,7 @@ All options are optional. If [REQUIRED] options are not specified or are specifi
 def init_service(user_creds_file: str = 'token.json'):
     creds = None
 
-    if os.path.exists('token.json'):
+    if os.path.exists(user_creds_file):
         creds = Credentials.from_authorized_user_file(user_creds_file, SCOPES)
 
     if not creds or not creds.valid:
@@ -55,31 +55,32 @@ def init_service(user_creds_file: str = 'token.json'):
 
 
 def get_date_time_interactive(verb: str) -> datetime | NoReturn:
-    # TODO: Add default values in logical places
-    def ensure_input(code: Callable[[], int]) -> int:
+    def ensure_input(msg: str, default_val: int | None = None) -> int:
         while True:
             try:
-                data = code()
+                # The space before [{default_value}] is intentional and simply there for formatting purposes
+                data = input(msg.format(
+                    f' [{default_val}]' if default_val != None else ''))
+                data = default_val if default_val != None and data == '' else int(
+                    data)
             except ValueError:
                 print(f'Please enter an integer only!!')
             else:
                 return data
+    while True:
+        year = ensure_input(f'Enter year of {verb}{{}}: ', datetime.now().year)
+        month = ensure_input(
+            f'Enter the number of the month of {verb} (1 for January and so on){{}}: ', datetime.now().month)
+        date = ensure_input(
+            f'Enter the date{{}}: ', int(datetime.now().strftime('%-d')))
+        hour = ensure_input(
+            f'Enter the hour of {verb} in 24-hour format{{}}: ')
+        minute = ensure_input(f'Enter the minute of {verb}{{}}: ')
 
-    year = ensure_input(lambda: int(input(f'Enter year of {verb}: ')))
-    month = ensure_input(lambda: int(
-        input(f'Enter the number of the month of {verb} [1 for January and so on]: ')))
-    date = ensure_input(lambda: int(input(f'Enter the date: ')))
-    hour = ensure_input(lambda: int(
-        input(f'Enter the hour of {verb} in 24-hour format: ')))
-    minute = ensure_input(lambda: int(
-        input(f'Enter the minute of {verb}: ')))
-
-    try:
-        return datetime(year, month, date, hour, minute).astimezone()
-    # TODO: Think about if this deserves quitting the program or trying forever
-    except ValueError as e:
-        print(f'Ivalid date entered: {e}. Exiting...')
-        exit(1)
+        try:
+            return datetime(year, month, date, hour, minute).astimezone()
+        except ValueError as e:
+            print(f'Ivalid date entered: {e}. Let us retry!')
 
 
 class ValuefulFlag:
