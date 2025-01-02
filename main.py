@@ -55,6 +55,7 @@ def init_service(user_creds_file: str = 'token.json'):
 
 
 def get_date_time_interactive(verb: str) -> datetime | NoReturn:
+    # TODO: If the travel mode is specified then 'Enter your arrival/departure' date and time should be replaced by respective transport vehicle
     def ensure_input(msg: str, default_val: int | None = None) -> int:
         while True:
             try:
@@ -101,8 +102,8 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
         print(HELP_MSG)
         exit(0)
 
-    valueful_flags: list[ValuefulFlag] = [
-        ValuefulFlag(
+    valueful_flags: dict[str, ValuefulFlag] = {
+        'departure': ValuefulFlag(
             name='departure',
             value_err_msg=ARRIVAL_DEPARTURE_INCORRECT_ERR_MSG.format(
                 'departure'),
@@ -111,7 +112,7 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
             with_data=lambda data: datetime.fromisoformat(data).astimezone(),
             interactive_getter=lambda: get_date_time_interactive('departure')
         ),
-        ValuefulFlag(
+        'arrival': ValuefulFlag(
             name='arrival',
             value_err_msg=ARRIVAL_DEPARTURE_INCORRECT_ERR_MSG.format(
                 'arrival'),
@@ -120,55 +121,49 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
             with_data=lambda data: datetime.fromisoformat(data).astimezone(),
             interactive_getter=lambda: get_date_time_interactive('arrival')
         ),
-    ]
+    }
 
     next_accounted_for = False
     for i, arg in enumerate(args):
-        # TODO: If the travel mode is specified then 'Enter your arrival/departure' date and time should be replaced by respective transport vehicle
         # TODO: Instead of specifying departure date time, give user the option to specify journey duration
-
-        is_valid_arg = False
 
         if next_accounted_for:
             next_accounted_for = False
             continue
 
-        for flag in valueful_flags:
-            if arg.startswith(flag.flag_name):
-                is_valid_arg = True
-                try:
-                    # Value specified as --departure '2025-01-14'
-                    if len(arg) == len(flag.flag_name):
-                        # Cases where the flag is given but not its value
-                        if len(args) - 1 <= i or args[i + 1].startswith('--'):
-                            print(flag.missing_err_msg)
-                            flag.value = flag.interactive_getter()
-                        else:
-                            next_accounted_for = True
-                            flag.value = flag.with_data(args[i + 1])
-                    # Value specified as --departure='2025-01-14'
-                    elif arg[len(flag.flag_name)] == '=':
-                        flag.value = flag.with_data(
-                            arg[len(flag.flag_name) + 1:])
-                    # Some garbled value like --departure2025-01
-                    else:
-                        print(f'Unrecognized option: {arg}. Exiting...')
-                        exit(-1)
-                # This ValueError will only occur when the specified data is garbled
-                except ValueError:
-                    print(flag.value_err_msg)
-                    flag.value = flag.interactive_getter()
-                break
-
-        if not is_valid_arg:
+        if not arg.startswith('--'):
             print(f'Unrecognized option: {arg}. Exiting...')
             exit(-1)
 
-    for flag in valueful_flags:
+        if flag := valueful_flags.get(arg.split('=', maxsplit=1)[0][2:]):
+            try:
+                # Value specified as --departure '2025-01-14'
+                if len(arg) == len(flag.flag_name):
+                    # Cases where the flag is given but not its value
+                    if len(args) - 1 <= i or args[i + 1].startswith('--'):
+                        print(flag.missing_err_msg)
+                        flag.value = flag.interactive_getter()
+                    else:
+                        next_accounted_for = True
+                        flag.value = flag.with_data(args[i + 1])
+                # Value specified as --departure='2025-01-14'
+                elif arg[len(flag.flag_name)] == '=':
+                    flag.value = flag.with_data(
+                        arg[len(flag.flag_name) + 1:])
+                # Some garbled value like --departure2025-01
+                else:
+                    print(f'Unrecognized option: {arg}. Exiting...')
+                    exit(-1)
+            # This ValueError will only occur when the specified data is garbled
+            except ValueError:
+                print(flag.value_err_msg)
+                flag.value = flag.interactive_getter()
+
+    for flag in valueful_flags.values():
         if not flag.value:
             flag.value = flag.interactive_getter()
 
-    return map(lambda flag: flag.value, valueful_flags)
+    return map(lambda flag: flag.value, valueful_flags.values())
 
 
 def main():
