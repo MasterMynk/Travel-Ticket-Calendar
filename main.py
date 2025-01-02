@@ -5,7 +5,7 @@ import os.path
 import sys
 from datetime import datetime
 from collections.abc import Callable
-from typing import TypeVar
+from typing import TypeVar, NoReturn
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -14,6 +14,19 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
+
+ARRIVAL_DEPARTURE_ERR_MSG = '''--{0} value specified incorrectly.
+Correct format is YYYY-MM-DD HH:MM:SS and optionally YYYY-MM-DD HH:MM:SS+HH:MM to specify timezone.
+Enter your {0} date and time:'''
+
+HELP_MSG = f'''Script to create an event on google calendar regarding your travel bookings.
+{os.path.basename(__file__)} [options]
+
+All options are optional. If [REQUIRED] options are not specified or are specified incorrectly, they will be asked from you in an interactive mode. Here's a list:
+--help: Prints this help message and exits the program
+
+--departure='YYYY-MM-DD HH:MM:SS' or --departure='YYYY-MM-DD HH:MM:SS+HH:MM': [REQUIRED] Specifies the beginning date and time of your journey along with utc offset if necessary.
+--arrival='YYYY-MM-DD HH:MM:SS' or --arrival='YYYY-MM-DD HH:MM:SS+HH:MM': [REQUIRED] Specifies the ending date and time of your journey along with utc offset if necessary.'''
 
 
 def init_service(user_creds_file='token.json'):
@@ -76,10 +89,11 @@ class ValuefulFlag:
         self.value: self._T | None = None
 
 
-def parse_args(args) -> tuple[datetime, datetime]:
-    ARRIVAL_DEPARTURE_ERR_MSG = '''--{0} value specified incorrectly.
-Correct format is YYYY-MM-DD HH:MM:SS and optionally YYYY-MM-DD HH:MM:SS+HH:MM to specify timezone.
-Enter your {0} date and time:'''
+def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
+    # Special case if --help is specified
+    if args.count('--help') >= 1:
+        print(HELP_MSG)
+        exit(0)
 
     valueful_flags: list[ValuefulFlag] = [
         ValuefulFlag(
