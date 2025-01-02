@@ -3,7 +3,7 @@
 
 import os.path
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections.abc import Callable
 from typing import TypeVar, NoReturn
 
@@ -15,13 +15,24 @@ from googleapiclient.errors import HttpError
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
-ARRIVAL_DEPARTURE_INCORRECT_ERR_MSG = '''--{0} value specified incorrectly.
+ARRIVAL_DEPARTURE_INCORRECT_ERR_MSG = '''
+--{0} value specified incorrectly.
 Correct format is YYYY-MM-DD HH:MM:SS and optionally YYYY-MM-DD HH:MM:SS+HH:MM to specify timezone.
-Enter your {0} date and time:'''
-ARRIVAL_DEPARTURE_MISSING_ERR_MSG = '''Date and time value for --{0} missing.
+'''
+ARRIVAL_DEPARTURE_MISSING_ERR_MSG = '''
+Date and time value for --{0} missing.
 You can specify it with --{0}='YYYY-MM-DD HH:MM:SS' or --{0}='YYYY-MM-DD HH:MM:SS+HH:MM' to specify timezone
-or specify it by doing --{0} 'YYYY-MM-DD HH:MM:SS' or --{0} 'YYYY-MM-DD HH:MM:SS+HH:MM'
-Enter your {0} date and time:'''
+or specify it by doing --{0} 'YYYY-MM-DD HH:MM:SS' or --{0} 'YYYY-MM-DD HH:MM:SS+HH:MM'.
+'''
+
+DURATION_VALUE_ERR_MSG = '''
+Value for --duration specified incorrectly.
+Correct format is 'HH:MM'.
+'''
+DURATION_MISSING_ERR_MSG = '''
+Value for --duration missing.
+You can specify it by using --duration='HH:MM' or --duration 'HH:MM'
+'''
 
 HELP_MSG = f'''Script to create an event on google calendar regarding your travel bookings.
 {os.path.basename(__file__)} [options]
@@ -54,20 +65,22 @@ def init_service(user_creds_file: str = 'token.json'):
     return build('calendar', 'v3', credentials=creds)
 
 
-def get_date_time_interactive(verb: str) -> datetime | NoReturn:
-    # TODO: If the travel mode is specified then 'Enter your arrival/departure' date and time should be replaced by respective transport vehicle
-    def ensure_input(msg: str, default_val: int | None = None) -> int:
-        while True:
-            try:
-                # The space before [{default_value}] is intentional and simply there for formatting purposes
-                data = input(msg.format(
-                    f' [{default_val}]' if default_val != None else ''))
-                data = default_val if default_val != None and data == '' else int(
-                    data)
-            except ValueError:
-                print(f'Please enter an integer only!!')
-            else:
-                return data
+def ensure_input(msg: str, default_val: int | None = None) -> int:
+    while True:
+        try:
+            # The space before [{default_value}] is intentional and simply there for formatting purposes
+            data = input(msg.format(
+                f' [{default_val}]' if default_val != None else ''))
+            data = default_val if default_val != None and data == '' else int(
+                data)
+        except ValueError:
+            print(f'Please enter an integer only!!')
+        else:
+            return data
+
+
+def get_date_time_interactive(verb: str) -> datetime:
+    print(f'Enter your {verb} date and time below')
     while True:
         year = ensure_input(f'Enter year of {verb}{{}}: ', datetime.now().year)
         month = ensure_input(
@@ -81,19 +94,31 @@ def get_date_time_interactive(verb: str) -> datetime | NoReturn:
         try:
             return datetime(year, month, date, hour, minute).astimezone()
         except ValueError as e:
-            print(f'Ivalid date entered: {e}. Let us retry!')
+            print(f'Ivalid date entered: {e}. Let us try again!')
+
+
+def get_duration_interactive() -> timedelta:
+    print('Enter your travel duration: ')
+    while True:
+        hours = ensure_input('How many hours is your journey? ')
+        minutes = ensure_input('How many minutes is your journey? ')
+
+        try:
+            return timedelta(hours=hours, minutes=minutes)
+        except ValueError as e:
+            print(f'Invalid duration entered: {e}. Let us try again!')
 
 
 class ValuefulFlag:
     _T = TypeVar('_T')
 
-    def __init__(self, name: str, value_err_msg: str, missing_err_msg: str, with_data: Callable[[str], _T], interactive_getter: Callable[[], _T]):
+    def __init__(self, name: str, val_err_msg: str, missing_err_msg: str, with_data: Callable[[str], _T], interactive_getter: Callable[[], _T]):
         self.flag_name = f'--{name}'
-        self.value_err_msg = value_err_msg
+        self.val_err_msg = val_err_msg
         self.missing_err_msg = missing_err_msg
         self.with_data = with_data
         self.interactive_getter = interactive_getter
-        self.value: self._T | None = None
+        self.val: self._T | None = None
 
 
 def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
@@ -102,10 +127,10 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
         print(HELP_MSG)
         exit(0)
 
-    valueful_flags: dict[str, ValuefulFlag] = {
+    val_flags: dict[str, ValuefulFlag] = {
         'departure': ValuefulFlag(
             name='departure',
-            value_err_msg=ARRIVAL_DEPARTURE_INCORRECT_ERR_MSG.format(
+            val_err_msg=ARRIVAL_DEPARTURE_INCORRECT_ERR_MSG.format(
                 'departure'),
             missing_err_msg=ARRIVAL_DEPARTURE_MISSING_ERR_MSG.format(
                 'departure'),
@@ -114,18 +139,26 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
         ),
         'arrival': ValuefulFlag(
             name='arrival',
-            value_err_msg=ARRIVAL_DEPARTURE_INCORRECT_ERR_MSG.format(
+            val_err_msg=ARRIVAL_DEPARTURE_INCORRECT_ERR_MSG.format(
                 'arrival'),
             missing_err_msg=ARRIVAL_DEPARTURE_MISSING_ERR_MSG.format(
                 'arrival'),
             with_data=lambda data: datetime.fromisoformat(data).astimezone(),
             interactive_getter=lambda: get_date_time_interactive('arrival')
         ),
+        'duration': ValuefulFlag(
+            name='duration',
+            val_err_msg=DURATION_VALUE_ERR_MSG,
+            missing_err_msg=DURATION_MISSING_ERR_MSG,
+            with_data=lambda data: timedelta(
+                hours=int(data[:2]), minutes=int(data[3:])),
+            interactive_getter=get_duration_interactive
+        )
     }
 
     next_accounted_for = False
     for i, arg in enumerate(args):
-        # TODO: Instead of specifying departure date time, give user the option to specify journey duration
+        # TODO: Print a summary of all data collected before using it to add calendar event
 
         if next_accounted_for:
             next_accounted_for = False
@@ -135,20 +168,20 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
             print(f'Unrecognized option: {arg}. Exiting...')
             exit(-1)
 
-        if flag := valueful_flags.get(arg.split('=', maxsplit=1)[0][2:]):
+        if flag := val_flags.get(arg.split('=', maxsplit=1)[0][2:]):
             try:
                 # Value specified as --departure '2025-01-14'
                 if len(arg) == len(flag.flag_name):
                     # Cases where the flag is given but not its value
                     if len(args) - 1 <= i or args[i + 1].startswith('--'):
                         print(flag.missing_err_msg)
-                        flag.value = flag.interactive_getter()
+                        flag.val = flag.interactive_getter()
                     else:
                         next_accounted_for = True
-                        flag.value = flag.with_data(args[i + 1])
+                        flag.val = flag.with_data(args[i + 1])
                 # Value specified as --departure='2025-01-14'
                 elif arg[len(flag.flag_name)] == '=':
-                    flag.value = flag.with_data(
+                    flag.val = flag.with_data(
                         arg[len(flag.flag_name) + 1:])
                 # Some garbled value like --departure2025-01
                 else:
@@ -156,14 +189,35 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
                     exit(-1)
             # This ValueError will only occur when the specified data is garbled
             except ValueError:
-                print(flag.value_err_msg)
-                flag.value = flag.interactive_getter()
+                print(flag.val_err_msg)
+                flag.val = flag.interactive_getter()
 
-    for flag in valueful_flags.values():
-        if not flag.value:
-            flag.value = flag.interactive_getter()
+    departure = val_flags['departure'].val
+    arrival = val_flags['arrival'].val
+    dur = val_flags['duration'].val
+    if departure and arrival and dur:
+        print('--departure, --arrival and --duration all 3 specified. Only considering --departure and --arrival')
+        dur = arrival - departure
+    elif departure and arrival:
+        dur = arrival - departure
+    elif departure and dur:
+        arrival = departure + dur
+    elif arrival and dur:
+        departure = arrival - dur
+    elif dur:
+        departure = val_flags['departure'].interactive_getter()
+        arrival = departure + dur
+    else:
+        if departure:
+            arrival = val_flags['arrival'].interactive_getter()
+        elif arrival:
+            departure = val_flags['departure'].interactive_getter()
+        else:
+            departure = val_flags['departure'].interactive_getter()
+            arrival = val_flags['arrival'].interactive_getter()
+        dur = arrival - departure
 
-    return map(lambda flag: flag.value, valueful_flags.values())
+    return (departure, arrival)
 
 
 def main():
