@@ -48,6 +48,12 @@ You can specify it by doing --color=banana or --color tangerine from the followi
 {COLORS}
 '''
 
+TYPE_MISSING_ERR_MSG = f'''
+Value for --type missing.
+You can specify it by doing --type='type of travel' or --type 'type of travel'
+Eg: --type 'Flight'
+'''
+
 HELP_MSG = f'''Script to create an event on google calendar regarding your travel bookings.
 {os.path.basename(__file__)} [options]
 
@@ -59,7 +65,10 @@ Any 2 of the 3 below are required. If all 3 are specified. Only --departure and 
 --arrival='YYYY-MM-DD HH:MM:SS' or --arrival='YYYY-MM-DD HH:MM:SS+HH:MM': [REQUIRED] Specifies the ending date and time of your journey along with utc offset if necessary.
 --duration='HH:MM': Specifies the duration of the journey
 
---color='color name'. Available options are: {COLORS}. Default is Banana
+--color='color name'. Available options are: {COLORS}. Default is Banana.
+
+--type='type of travel'. This will appear in the title of the event as 'TYPE to LOCATION'
+Eg: --type=Flight then title could be 'Flight to New Delhi'
 '''
 
 PRETTY_DATETIME_FMT = '%A, %b %-d %Y %-I:%M%p'
@@ -89,10 +98,10 @@ def init_service(user_creds_file: str = 'token.json'):
 def ensure_input(msg: str, default_val: int | None = None, constraint: Callable[[int], bool] = lambda _: True, constraint_err_msg: str = '') -> int:
     while True:
         try:
-            # The space before [{default_value}] is intentional and simply there for formatting purposes
             if default_val == None:
                 data = int(input(msg))
             else:
+                # The space before [{default_value}] is intentional and simply there for formatting purposes
                 data = input(msg.format(f' [{default_val}]'))
                 data = default_val if data == '' else int(data)
 
@@ -180,7 +189,7 @@ def menu(items: Iterable[str], msg: str) -> int:
 class ValueFlag:
     _T = TypeVar('_T')
 
-    def __init__(self, name: str, val_err_msg: str, missing_err_msg: str, with_data: Callable[[str], _T], ask: Callable[[], _T], as_str: Callable[[Self], str] = lambda _: 'TODO', initial_val: _T | None = None):
+    def __init__(self, name: str, val_err_msg: str, missing_err_msg: str, with_data: Callable[[str], _T], ask: Callable[[], _T], as_str: Callable[[Self], str], initial_val: _T | None = None):
         self.flag = f'--{name}'
         self.val_err_msg = val_err_msg
         self.missing_err_msg = missing_err_msg
@@ -193,7 +202,7 @@ class ValueFlag:
         return self.as_str(self)
 
 
-def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
+def parse_args(args: list[str]) -> tuple[datetime, datetime, int, str] | NoReturn:
     # Special case if --help is specified
     if args.count('--help') >= 1:
         print(HELP_MSG)
@@ -238,7 +247,16 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
             with_data=lambda data: COLORS.index(data.capitalize()) + 1,
             ask=lambda: menu(COLORS, 'Enter the index of your chosen color: '),
             as_str=lambda self: f'Color for event: {COLORS[self.val - 1]}',
-            initial_val=COLORS.index('Banana')
+            initial_val=COLORS.index('Banana') + 1
+        ),
+        'type': ValueFlag(
+            name='type',
+            val_err_msg='',
+            missing_err_msg=TYPE_MISSING_ERR_MSG,
+            with_data=lambda data: data,
+            ask=lambda: input('Enter the type of travel this is: '),
+            as_str=lambda self: f'Title: {self.val} to location',
+            initial_val='Trip',
         )
     }
 
@@ -291,7 +309,7 @@ Summary of your tickets...''')
 Is all this information alright? [Y/n]: ''')
 
         if deets_ok.lower() == 'y' or deets_ok == '':
-            return (val_flags['departure'].val, val_flags['arrival'].val, val_flags['color'].val)
+            return (val_flags['departure'].val, val_flags['arrival'].val, val_flags['color'].val, val_flags['type'].val)
         elif deets_ok.lower() == 'n':
             # Printing the choosing menu
             faulty_entry = menu(flags := list(val_flags.keys()),
@@ -313,12 +331,12 @@ Is all this information alright? [Y/n]: ''')
 
 def main():
     # First element in argv is the name of the script itself
-    departure, arrival, color = parse_args(sys.argv[1:])
+    departure, arrival, color, travel_type = parse_args(sys.argv[1:])
 
     try:
         service = init_service()
         response = service.events().insert(calendarId='primary', body={
-            'summary': 'Ticket',
+            'summary': f'{travel_type} to location',
             'start': {
                 'dateTime': departure.isoformat()
             },
