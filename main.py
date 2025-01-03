@@ -91,17 +91,24 @@ def ensure_input(msg: str, default_val: int | None = None, constraint: Callable[
             return data
 
 
-def get_date_time_interactive(verb: str) -> datetime:
-    # TODO: Add some constraints for some of the following fields
+def ask_datetime(verb: str) -> datetime:
     print(f'Enter your {verb} date and time below')
     while True:
         year = ensure_input(f'Enter year of {verb}{{}}: ', datetime.now().year)
         month = ensure_input(
-            f'Enter the number of the month of {verb} (1 for January and so on){{}}: ', datetime.now().month)
+            f'Enter the number of the month of {
+                verb} (1 for January and so on){{}}: ',
+            datetime.now().month,
+            constraint=lambda month: 0 < month < 13,
+            constraint_err_msg='1 represents January and 12 represents December. Please enter month number accordingly!')
         date = ensure_input(
             f'Enter the date{{}}: ', int(datetime.now().strftime('%-d')))
-        hour = ensure_input(f'Enter the hour of {verb} in 24-hour format: ')
-        minute = ensure_input(f'Enter the minute of {verb}: ')
+        hour = ensure_input(f'Enter the hour of {verb} in 24-hour format: ',
+                            constraint=lambda hour: 0 <= hour < 24,
+                            constraint_err_msg='0 represents 12am and 23 represents 11pm. Enter hour accordingly!')
+        minute = ensure_input(f'Enter the minute of {verb}: ',
+                              constraint=lambda minute: 0 <= minute < 60,
+                              constraint_err_msg='Please ensure 0 <= minute < 60')
 
         try:
             return datetime(year, month, date, hour, minute).astimezone()
@@ -109,7 +116,7 @@ def get_date_time_interactive(verb: str) -> datetime:
             print(f'Ivalid date entered: {e}. Let us try again!')
 
 
-def get_duration_interactive() -> timedelta:
+def ask_duration() -> timedelta:
     print('Enter your travel duration: ')
     while True:
         hours = ensure_input('How many hours is your journey? ')
@@ -173,7 +180,7 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
             missing_err_msg=ARRIVAL_DEPARTURE_MISSING_ERR_MSG.format(
                 'departure'),
             with_data=lambda data: datetime.fromisoformat(data).astimezone(),
-            ask=lambda: get_date_time_interactive('departure')
+            ask=lambda: ask_datetime('departure')
         ),
         'arrival': ValueFlag(
             name='arrival',
@@ -182,7 +189,7 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
             missing_err_msg=ARRIVAL_DEPARTURE_MISSING_ERR_MSG.format(
                 'arrival'),
             with_data=lambda data: datetime.fromisoformat(data).astimezone(),
-            ask=lambda: get_date_time_interactive('arrival')
+            ask=lambda: ask_datetime('arrival')
         ),
         'duration': ValueFlag(
             name='duration',
@@ -190,14 +197,12 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
             missing_err_msg=DURATION_MISSING_ERR_MSG,
             with_data=lambda data: timedelta(
                 hours=int(data[:2]), minutes=int(data[3:])),
-            ask=get_duration_interactive
+            ask=ask_duration
         )
     }
 
     next_accounted_for = False
     for i, arg in enumerate(args):
-        # TODO: Print a summary of all data collected before using it to add calendar event
-
         if next_accounted_for:
             next_accounted_for = False
             continue
@@ -242,8 +247,7 @@ Departure time: {val_flags['departure'].val.strftime(PRETTY_DATETIME_FMT)}
 Duration of journey: {val_flags['duration'].val}
 Arrival time: {val_flags['arrival'].val.strftime(PRETTY_DATETIME_FMT)}
 {'-'*30}
-Is all this information alright? [Y/n]:
-''')
+Is all this information alright? [Y/n]: ''')
         if deets_ok.lower() == 'y' or deets_ok == '':
             return (val_flags['departure'].val, val_flags['arrival'].val)
         elif deets_ok.lower() == 'n':
