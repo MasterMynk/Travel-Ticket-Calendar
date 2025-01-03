@@ -5,7 +5,7 @@ import os.path
 import sys
 from datetime import datetime, timedelta
 from collections.abc import Callable
-from typing import TypeVar, NoReturn, Self
+from typing import TypeVar, NoReturn, Self, Iterable
 from functools import reduce
 
 from google.auth.transport.requests import Request
@@ -154,6 +154,14 @@ def departure_arrival_duration_calc(departure: datetime, ask_departure: Callable
     return departure, arrival, duration
 
 
+def menu(items: Iterable[str], msg: str) -> int:
+    for i, item in enumerate(items):
+        print(f'{i + 1}. {item.capitalize()}')
+
+    return ensure_input(msg, constraint=lambda x: 1 <= x <= len(items),
+                        constraint_err_msg=f'Please ensure 0 < input < {len(items) + 1}') - 1
+
+
 class ValueFlag:
     _T = TypeVar('_T')
 
@@ -262,11 +270,8 @@ Is all this information alright? [Y/n]: ''')
             return (val_flags['departure'].val, val_flags['arrival'].val)
         elif deets_ok.lower() == 'n':
             # Printing the choosing menu
-            for i, flag in enumerate(flags := list(val_flags.keys())):
-                print(f'{i + 1}. {flag.capitalize()}')
-
-            faulty_entry = ensure_input('Enter index of incorrect entry: ', constraint=lambda x: 1 <= x <= len(
-                flags), constraint_err_msg=f'Please ensure 0 < input < {len(flags) + 1}') - 1
+            faulty_entry = menu(flags := list(val_flags.keys()),
+                                msg='Enter index of incorrect entry: ')
 
             val_flags[flags[faulty_entry]
                       ].val = val_flags[flags[faulty_entry]].ask()
