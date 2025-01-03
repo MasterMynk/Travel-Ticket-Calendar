@@ -58,6 +58,8 @@ Any 2 of the 3 below are required. If all 3 are specified. Only --departure and 
 --departure='YYYY-MM-DD HH:MM:SS' or --departure='YYYY-MM-DD HH:MM:SS+HH:MM': [REQUIRED] Specifies the beginning date and time of your journey along with utc offset if necessary.
 --arrival='YYYY-MM-DD HH:MM:SS' or --arrival='YYYY-MM-DD HH:MM:SS+HH:MM': [REQUIRED] Specifies the ending date and time of your journey along with utc offset if necessary.
 --duration='HH:MM': Specifies the duration of the journey
+
+--color='color name'. Available options are: {COLORS}. Default is Banana
 '''
 
 PRETTY_DATETIME_FMT = '%A, %b %-d %Y %-I:%M%p'
