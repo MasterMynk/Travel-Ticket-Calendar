@@ -35,6 +35,19 @@ Value for --duration missing.
 You can specify it by using --duration='HH:MM' or --duration 'HH:MM'
 '''
 
+COLORS = ['Lavendar', 'Sage', 'Grape', 'Flamingo', 'Banana',
+          'Tangerine', 'Peacock', 'Graphite', 'Blueberry', 'Basil', 'Tomato']
+COLOR_VAL_ERR_MSG = f'''
+Value for --color specified incorrectly.
+--color only accepts one of the following as value: {COLORS}
+Eg: --color=lavendar or --color banana
+'''
+COLOR_MISSING_ERR_MSG = f'''
+Value for --color option missing.
+You can specify it by doing --color=banana or --color tangerine from the following list of colors:
+{COLORS}
+'''
+
 HELP_MSG = f'''Script to create an event on google calendar regarding your travel bookings.
 {os.path.basename(__file__)} [options]
 
@@ -159,19 +172,19 @@ def menu(items: Iterable[str], msg: str) -> int:
         print(f'{i + 1}. {item.capitalize()}')
 
     return ensure_input(msg, constraint=lambda x: 1 <= x <= len(items),
-                        constraint_err_msg=f'Please ensure 0 < input < {len(items) + 1}') - 1
+                        constraint_err_msg=f'Please ensure 0 < input < {len(items) + 1}')
 
 
 class ValueFlag:
     _T = TypeVar('_T')
 
-    def __init__(self, name: str, val_err_msg: str, missing_err_msg: str, with_data: Callable[[str], _T], ask: Callable[[], _T], as_str: Callable[[Self], str] = lambda _: 'TODO'):
+    def __init__(self, name: str, val_err_msg: str, missing_err_msg: str, with_data: Callable[[str], _T], ask: Callable[[], _T], as_str: Callable[[Self], str] = lambda _: 'TODO', initial_val: _T | None = None):
         self.flag = f'--{name}'
         self.val_err_msg = val_err_msg
         self.missing_err_msg = missing_err_msg
         self.with_data = with_data
         self.ask = ask
-        self.val: self._T | None = None
+        self.val: self._T | None = initial_val
         self.as_str = as_str
 
     def __str__(self):
@@ -215,6 +228,15 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
                 hours=int(data[:2]), minutes=int(data[3:])),
             ask=ask_duration,
             as_str=lambda self: f'Duration of journey: {self.val}'
+        ),
+        'color': ValueFlag(
+            name='color',
+            val_err_msg=COLOR_VAL_ERR_MSG,
+            missing_err_msg=COLOR_MISSING_ERR_MSG,
+            with_data=lambda data: COLORS.index(data.capitalize()) + 1,
+            ask=lambda: menu(COLORS, 'Enter the index of your chosen color: '),
+            as_str=lambda self: f'Color for event: {COLORS[self.val - 1]}',
+            initial_val=COLORS.index('Banana')
         )
     }
 
@@ -267,11 +289,11 @@ Summary of your tickets...''')
 Is all this information alright? [Y/n]: ''')
 
         if deets_ok.lower() == 'y' or deets_ok == '':
-            return (val_flags['departure'].val, val_flags['arrival'].val)
+            return (val_flags['departure'].val, val_flags['arrival'].val, val_flags['color'].val)
         elif deets_ok.lower() == 'n':
             # Printing the choosing menu
             faulty_entry = menu(flags := list(val_flags.keys()),
-                                msg='Enter index of incorrect entry: ')
+                                msg='Enter index of incorrect entry: ') - 1
 
             val_flags[flags[faulty_entry]
                       ].val = val_flags[flags[faulty_entry]].ask()
@@ -289,7 +311,7 @@ Is all this information alright? [Y/n]: ''')
 
 def main():
     # First element in argv is the name of the script itself
-    departure, arrival = parse_args(sys.argv[1:])
+    departure, arrival, color = parse_args(sys.argv[1:])
 
     try:
         service = init_service()
@@ -300,7 +322,8 @@ def main():
             },
             'end': {
                 'dateTime': arrival.isoformat()
-            }
+            },
+            'colorId': str(color)
         }).execute()
         print(f"Added event at {response['htmlLink']}")
 
