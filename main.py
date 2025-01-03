@@ -6,6 +6,7 @@ import sys
 from datetime import datetime, timedelta
 from collections.abc import Callable
 from typing import TypeVar, NoReturn
+from functools import reduce
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -15,7 +16,7 @@ from googleapiclient.errors import HttpError
 
 SCOPES = ['https://www.googleapis.com/auth/calendar']
 
-ARRIVAL_DEPARTURE_INCORRECT_ERR_MSG = '''
+ARRIVAL_DEPARTURE_VAL_ERR_MSG = '''
 --{0} value specified incorrectly.
 Correct format is YYYY-MM-DD HH:MM:SS and optionally YYYY-MM-DD HH:MM:SS+HH:MM to specify timezone.
 '''
@@ -25,7 +26,7 @@ You can specify it with --{0}='YYYY-MM-DD HH:MM:SS' or --{0}='YYYY-MM-DD HH:MM:S
 or specify it by doing --{0} 'YYYY-MM-DD HH:MM:SS' or --{0} 'YYYY-MM-DD HH:MM:SS+HH:MM'.
 '''
 
-DURATION_VALUE_ERR_MSG = '''
+DURATION_VAL_ERR_MSG = '''
 Value for --duration specified incorrectly.
 Correct format is 'HH:MM'.
 '''
@@ -40,8 +41,11 @@ HELP_MSG = f'''Script to create an event on google calendar regarding your trave
 All options are optional. If [REQUIRED] options are not specified or are specified incorrectly, they will be asked from you in an interactive mode. Here's a list:
 --help: Prints this help message and exits the program
 
+Any 2 of the 3 below are required. If all 3 are specified. Only --departure and --arrival values are considered
 --departure='YYYY-MM-DD HH:MM:SS' or --departure='YYYY-MM-DD HH:MM:SS+HH:MM': [REQUIRED] Specifies the beginning date and time of your journey along with utc offset if necessary.
---arrival='YYYY-MM-DD HH:MM:SS' or --arrival='YYYY-MM-DD HH:MM:SS+HH:MM': [REQUIRED] Specifies the ending date and time of your journey along with utc offset if necessary.'''
+--arrival='YYYY-MM-DD HH:MM:SS' or --arrival='YYYY-MM-DD HH:MM:SS+HH:MM': [REQUIRED] Specifies the ending date and time of your journey along with utc offset if necessary.
+--duration='HH:MM': Specifies the duration of the journey
+'''
 
 
 def init_service(user_creds_file: str = 'token.json'):
@@ -109,11 +113,11 @@ def get_duration_interactive() -> timedelta:
             print(f'Invalid duration entered: {e}. Let us try again!')
 
 
-class ValuefulFlag:
+class ValueFlag:
     _T = TypeVar('_T')
 
     def __init__(self, name: str, val_err_msg: str, missing_err_msg: str, with_data: Callable[[str], _T], interactive_getter: Callable[[], _T]):
-        self.flag_name = f'--{name}'
+        self.flag = f'--{name}'
         self.val_err_msg = val_err_msg
         self.missing_err_msg = missing_err_msg
         self.with_data = with_data
@@ -127,28 +131,28 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
         print(HELP_MSG)
         exit(0)
 
-    val_flags: dict[str, ValuefulFlag] = {
-        'departure': ValuefulFlag(
+    val_flags: dict[str, ValueFlag] = {
+        'departure': ValueFlag(
             name='departure',
-            val_err_msg=ARRIVAL_DEPARTURE_INCORRECT_ERR_MSG.format(
+            val_err_msg=ARRIVAL_DEPARTURE_VAL_ERR_MSG.format(
                 'departure'),
             missing_err_msg=ARRIVAL_DEPARTURE_MISSING_ERR_MSG.format(
                 'departure'),
             with_data=lambda data: datetime.fromisoformat(data).astimezone(),
             interactive_getter=lambda: get_date_time_interactive('departure')
         ),
-        'arrival': ValuefulFlag(
+        'arrival': ValueFlag(
             name='arrival',
-            val_err_msg=ARRIVAL_DEPARTURE_INCORRECT_ERR_MSG.format(
+            val_err_msg=ARRIVAL_DEPARTURE_VAL_ERR_MSG.format(
                 'arrival'),
             missing_err_msg=ARRIVAL_DEPARTURE_MISSING_ERR_MSG.format(
                 'arrival'),
             with_data=lambda data: datetime.fromisoformat(data).astimezone(),
             interactive_getter=lambda: get_date_time_interactive('arrival')
         ),
-        'duration': ValuefulFlag(
+        'duration': ValueFlag(
             name='duration',
-            val_err_msg=DURATION_VALUE_ERR_MSG,
+            val_err_msg=DURATION_VAL_ERR_MSG,
             missing_err_msg=DURATION_MISSING_ERR_MSG,
             with_data=lambda data: timedelta(
                 hours=int(data[:2]), minutes=int(data[3:])),
@@ -171,7 +175,7 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
         if flag := val_flags.get(arg.split('=', maxsplit=1)[0][2:]):
             try:
                 # Value specified as --departure '2025-01-14'
-                if len(arg) == len(flag.flag_name):
+                if len(arg) == len(flag.flag):
                     # Cases where the flag is given but not its value
                     if len(args) - 1 <= i or args[i + 1].startswith('--'):
                         print(flag.missing_err_msg)
@@ -180,17 +184,16 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
                         next_accounted_for = True
                         flag.val = flag.with_data(args[i + 1])
                 # Value specified as --departure='2025-01-14'
-                elif arg[len(flag.flag_name)] == '=':
+                elif arg[len(flag.flag)] == '=':
                     flag.val = flag.with_data(
-                        arg[len(flag.flag_name) + 1:])
-                # Some garbled value like --departure2025-01
-                else:
-                    print(f'Unrecognized option: {arg}. Exiting...')
-                    exit(-1)
+                        arg[len(flag.flag) + 1:])
             # This ValueError will only occur when the specified data is garbled
             except ValueError:
                 print(flag.val_err_msg)
                 flag.val = flag.interactive_getter()
+        else:
+            print(f'Unrecognized option {arg}. Exiting...')
+            exit(-1)
 
     departure = val_flags['departure'].val
     arrival = val_flags['arrival'].val
