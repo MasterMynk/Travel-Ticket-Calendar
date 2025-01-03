@@ -5,7 +5,7 @@ import os.path
 import sys
 from datetime import datetime, timedelta
 from collections.abc import Callable
-from typing import TypeVar, NoReturn
+from typing import TypeVar, NoReturn, Self
 from functools import reduce
 
 from google.auth.transport.requests import Request
@@ -157,13 +157,17 @@ def departure_arrival_duration_calc(departure: datetime, ask_departure: Callable
 class ValueFlag:
     _T = TypeVar('_T')
 
-    def __init__(self, name: str, val_err_msg: str, missing_err_msg: str, with_data: Callable[[str], _T], ask: Callable[[], _T]):
+    def __init__(self, name: str, val_err_msg: str, missing_err_msg: str, with_data: Callable[[str], _T], ask: Callable[[], _T], as_str: Callable[[Self], str] = lambda _: 'TODO'):
         self.flag = f'--{name}'
         self.val_err_msg = val_err_msg
         self.missing_err_msg = missing_err_msg
         self.with_data = with_data
         self.ask = ask
         self.val: self._T | None = None
+        self.as_str = as_str
+
+    def __str__(self):
+        return self.as_str(self)
 
 
 def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
@@ -180,7 +184,9 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
             missing_err_msg=ARRIVAL_DEPARTURE_MISSING_ERR_MSG.format(
                 'departure'),
             with_data=lambda data: datetime.fromisoformat(data).astimezone(),
-            ask=lambda: ask_datetime('departure')
+            ask=lambda: ask_datetime('departure'),
+            as_str=lambda self: f'Departure time: {
+                self.val.strftime(PRETTY_DATETIME_FMT)}'
         ),
         'arrival': ValueFlag(
             name='arrival',
@@ -189,7 +195,9 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
             missing_err_msg=ARRIVAL_DEPARTURE_MISSING_ERR_MSG.format(
                 'arrival'),
             with_data=lambda data: datetime.fromisoformat(data).astimezone(),
-            ask=lambda: ask_datetime('arrival')
+            ask=lambda: ask_datetime('arrival'),
+            as_str=lambda self: f'Arrival time: {
+                self.val.strftime(PRETTY_DATETIME_FMT)}'
         ),
         'duration': ValueFlag(
             name='duration',
@@ -197,7 +205,8 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
             missing_err_msg=DURATION_MISSING_ERR_MSG,
             with_data=lambda data: timedelta(
                 hours=int(data[:2]), minutes=int(data[3:])),
-            ask=ask_duration
+            ask=ask_duration,
+            as_str=lambda self: f'Duration of journey: {self.val}'
         )
     }
 
@@ -239,15 +248,16 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
 
     # Summary printing and correcting erroneous data
     while True:
-        # TODO: Try to use a loop for summary printing
-        deets_ok = input(f'''
+        print(f'''
 {'-'*30}
-Summary of your ticket...
-Departure time: {val_flags['departure'].val.strftime(PRETTY_DATETIME_FMT)}
-Duration of journey: {val_flags['duration'].val}
-Arrival time: {val_flags['arrival'].val.strftime(PRETTY_DATETIME_FMT)}
-{'-'*30}
+Summary of your tickets...''')
+
+        for flag in val_flags.values():
+            print(flag)
+
+        deets_ok = input(f'''{'-'*30}
 Is all this information alright? [Y/n]: ''')
+
         if deets_ok.lower() == 'y' or deets_ok == '':
             return (val_flags['departure'].val, val_flags['arrival'].val)
         elif deets_ok.lower() == 'n':
