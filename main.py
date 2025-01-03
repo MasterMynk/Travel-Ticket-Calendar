@@ -47,6 +47,8 @@ Any 2 of the 3 below are required. If all 3 are specified. Only --departure and 
 --duration='HH:MM': Specifies the duration of the journey
 '''
 
+PRETTY_DATETIME_FMT = '%A, %b %-d %Y %-I:%M%p'
+
 
 def init_service(user_creds_file: str = 'token.json'):
     creds = None
@@ -69,14 +71,20 @@ def init_service(user_creds_file: str = 'token.json'):
     return build('calendar', 'v3', credentials=creds)
 
 
-def ensure_input(msg: str, default_val: int | None = None) -> int:
+def ensure_input(msg: str, default_val: int | None = None, constraint: Callable[[int], bool] = lambda _: True, constraint_err_msg: str = '') -> int:
     while True:
         try:
             # The space before [{default_value}] is intentional and simply there for formatting purposes
-            data = input(msg.format(
-                f' [{default_val}]' if default_val != None else ''))
-            data = default_val if default_val != None and data == '' else int(
-                data)
+            if default_val == None:
+                data = int(input(msg))
+            else:
+                data = input(msg.format(f' [{default_val}]'))
+                data = default_val if data == '' else int(data)
+
+            if not constraint(data):
+                print(constraint_err_msg)
+                continue
+
         except ValueError:
             print(f'Please enter an integer only!!')
         else:
@@ -84,6 +92,7 @@ def ensure_input(msg: str, default_val: int | None = None) -> int:
 
 
 def get_date_time_interactive(verb: str) -> datetime:
+    # TODO: Add some constraints for some of the following fields
     print(f'Enter your {verb} date and time below')
     while True:
         year = ensure_input(f'Enter year of {verb}{{}}: ', datetime.now().year)
@@ -91,9 +100,8 @@ def get_date_time_interactive(verb: str) -> datetime:
             f'Enter the number of the month of {verb} (1 for January and so on){{}}: ', datetime.now().month)
         date = ensure_input(
             f'Enter the date{{}}: ', int(datetime.now().strftime('%-d')))
-        hour = ensure_input(
-            f'Enter the hour of {verb} in 24-hour format{{}}: ')
-        minute = ensure_input(f'Enter the minute of {verb}{{}}: ')
+        hour = ensure_input(f'Enter the hour of {verb} in 24-hour format: ')
+        minute = ensure_input(f'Enter the minute of {verb}: ')
 
         try:
             return datetime(year, month, date, hour, minute).astimezone()
@@ -113,15 +121,41 @@ def get_duration_interactive() -> timedelta:
             print(f'Invalid duration entered: {e}. Let us try again!')
 
 
+def departure_arrival_duration_calc(departure: datetime, ask_departure: Callable[[], datetime], arrival: datetime, ask_arrival: Callable[[], datetime], duration: timedelta) -> tuple[datetime, datetime, timedelta]:
+    if departure and arrival and duration:
+        print('--departure, --arrival and --duration all 3 specified. Only considering --departure and --arrival')
+        duration = arrival - departure
+    elif departure and arrival:
+        duration = arrival - departure
+    elif departure and duration:
+        arrival = departure + duration
+    elif arrival and duration:
+        departure = arrival - duration
+    elif duration:
+        departure = ask_departure()
+        arrival = departure + duration
+    else:
+        if departure:
+            arrival = ask_arrival()
+        elif arrival:
+            departure = ask_departure()
+        else:
+            departure = ask_departure()
+            arrival = ask_arrival()
+        duration = arrival - departure
+
+    return departure, arrival, duration
+
+
 class ValueFlag:
     _T = TypeVar('_T')
 
-    def __init__(self, name: str, val_err_msg: str, missing_err_msg: str, with_data: Callable[[str], _T], interactive_getter: Callable[[], _T]):
+    def __init__(self, name: str, val_err_msg: str, missing_err_msg: str, with_data: Callable[[str], _T], ask: Callable[[], _T]):
         self.flag = f'--{name}'
         self.val_err_msg = val_err_msg
         self.missing_err_msg = missing_err_msg
         self.with_data = with_data
-        self.interactive_getter = interactive_getter
+        self.ask = ask
         self.val: self._T | None = None
 
 
@@ -139,7 +173,7 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
             missing_err_msg=ARRIVAL_DEPARTURE_MISSING_ERR_MSG.format(
                 'departure'),
             with_data=lambda data: datetime.fromisoformat(data).astimezone(),
-            interactive_getter=lambda: get_date_time_interactive('departure')
+            ask=lambda: get_date_time_interactive('departure')
         ),
         'arrival': ValueFlag(
             name='arrival',
@@ -148,7 +182,7 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
             missing_err_msg=ARRIVAL_DEPARTURE_MISSING_ERR_MSG.format(
                 'arrival'),
             with_data=lambda data: datetime.fromisoformat(data).astimezone(),
-            interactive_getter=lambda: get_date_time_interactive('arrival')
+            ask=lambda: get_date_time_interactive('arrival')
         ),
         'duration': ValueFlag(
             name='duration',
@@ -156,7 +190,7 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
             missing_err_msg=DURATION_MISSING_ERR_MSG,
             with_data=lambda data: timedelta(
                 hours=int(data[:2]), minutes=int(data[3:])),
-            interactive_getter=get_duration_interactive
+            ask=get_duration_interactive
         )
     }
 
@@ -179,7 +213,7 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
                     # Cases where the flag is given but not its value
                     if len(args) - 1 <= i or args[i + 1].startswith('--'):
                         print(flag.missing_err_msg)
-                        flag.val = flag.interactive_getter()
+                        flag.val = flag.ask()
                     else:
                         next_accounted_for = True
                         flag.val = flag.with_data(args[i + 1])
@@ -190,37 +224,48 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime] | NoReturn:
             # This ValueError will only occur when the specified data is garbled
             except ValueError:
                 print(flag.val_err_msg)
-                flag.val = flag.interactive_getter()
+                flag.val = flag.ask()
         else:
             print(f'Unrecognized option {arg}. Exiting...')
             exit(-1)
 
-    departure = val_flags['departure'].val
-    arrival = val_flags['arrival'].val
-    dur = val_flags['duration'].val
-    if departure and arrival and dur:
-        print('--departure, --arrival and --duration all 3 specified. Only considering --departure and --arrival')
-        dur = arrival - departure
-    elif departure and arrival:
-        dur = arrival - departure
-    elif departure and dur:
-        arrival = departure + dur
-    elif arrival and dur:
-        departure = arrival - dur
-    elif dur:
-        departure = val_flags['departure'].interactive_getter()
-        arrival = departure + dur
-    else:
-        if departure:
-            arrival = val_flags['arrival'].interactive_getter()
-        elif arrival:
-            departure = val_flags['departure'].interactive_getter()
-        else:
-            departure = val_flags['departure'].interactive_getter()
-            arrival = val_flags['arrival'].interactive_getter()
-        dur = arrival - departure
+    val_flags['departure'].val, val_flags['arrival'].val, val_flags['duration'].val = departure_arrival_duration_calc(
+        val_flags['departure'].val, val_flags['departure'].ask, val_flags['arrival'].val, val_flags['arrival'].ask, val_flags['duration'].val)
 
-    return (departure, arrival)
+    # Summary printing and correcting erroneous data
+    while True:
+        # TODO: Try to use a loop for summary printing
+        deets_ok = input(f'''
+{'-'*30}
+Summary of your ticket...
+Departure time: {val_flags['departure'].val.strftime(PRETTY_DATETIME_FMT)}
+Duration of journey: {val_flags['duration'].val}
+Arrival time: {val_flags['arrival'].val.strftime(PRETTY_DATETIME_FMT)}
+{'-'*30}
+Is all this information alright? [Y/n]:
+''')
+        if deets_ok.lower() == 'y' or deets_ok == '':
+            return (val_flags['departure'].val, val_flags['arrival'].val)
+        elif deets_ok.lower() == 'n':
+            # Printing the choosing menu
+            for i, flag in enumerate(flags := list(val_flags.keys())):
+                print(f'{i + 1}. {flag.capitalize()}')
+
+            faulty_entry = ensure_input('Enter index of incorrect entry: ', constraint=lambda x: 1 <= x <= len(
+                flags), constraint_err_msg=f'Please ensure 0 < input < {len(flags) + 1}') - 1
+
+            val_flags[flags[faulty_entry]
+                      ].val = val_flags[flags[faulty_entry]].ask()
+
+            # Changing one of the 3 values - departure, arrival or duration - must affect the another for them to remain in harmony
+            if flags[faulty_entry] == 'duration':
+                val_flags['arrival'].val = val_flags['departure'].val + \
+                    val_flags['duration'].val
+            elif flags[faulty_entry] in ['departure', 'arrival']:
+                val_flags['duration'].val = val_flags['arrival'].val - \
+                    val_flags['departure'].val
+        else:
+            print("Didn't get you. Try again.")
 
 
 def main():
