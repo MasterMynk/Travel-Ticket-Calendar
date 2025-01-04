@@ -16,7 +16,7 @@ ARRIVAL_DEPARTURE_VAL_ERR_MSG = '''
 --{0} value specified incorrectly.
 Correct format is YYYY-MM-DD HH:MM:SS and optionally YYYY-MM-DD HH:MM:SS+HH:MM to specify timezone.
 '''
-ARRIVAL_DEPARTURE_MISSING_ERR_MSG = '''
+ARRIVAL_DEPARTURE_MISSING_MSG = '''
 Date and time value for --{0} missing.
 You can specify it with --{0}='YYYY-MM-DD HH:MM:SS' or --{0}='YYYY-MM-DD HH:MM:SS+HH:MM' to specify timezone
 or specify it by doing --{0} 'YYYY-MM-DD HH:MM:SS' or --{0} 'YYYY-MM-DD HH:MM:SS+HH:MM'.
@@ -26,7 +26,7 @@ DURATION_VAL_ERR_MSG = '''
 Value for --duration specified incorrectly.
 Correct format is 'HH:MM'.
 '''
-DURATION_MISSING_ERR_MSG = '''
+DURATION_MISSING_MSG = '''
 Value for --duration missing.
 You can specify it by using --duration='HH:MM' or --duration 'HH:MM'
 '''
@@ -38,22 +38,38 @@ Value for --color specified incorrectly.
 --color only accepts one of the following as value: {COLORS}
 Eg: --color=lavendar or --color banana
 '''
-COLOR_MISSING_ERR_MSG = f'''
+COLOR_MISSING_MSG = f'''
 Value for --color option missing.
 You can specify it by doing --color=banana or --color tangerine from the following list of colors:
 {COLORS}
 '''
 
-TYPE_MISSING_ERR_MSG = f'''
+TYPE_MISSING_MSG = f'''
 Value for --type missing.
 You can specify it by doing --type='type of travel' or --type 'type of travel'
 Eg: --type 'Flight'
+This will be added to the title in the form: 'Flight to [destination]'.
+'''
+
+FROM_MISSING_MSG = f'''
+Value for --from missing. This represents the boarding location for your journey.
+You can specify it by doing --from='Mopa Airport' or --from 'Dabolim Airport'
+This will be added to the from field of the google calendar event.
+'''
+TO_MISSING_MSG = f'''
+Value for --to missing. This represents your destination.
+You can specify it by doing --to='Thivim Railway Station' or --to 'Madgaon Railway Station'
+This will be added to the title in the form: '[Trip] to Madgaon Railway Station'.
 '''
 
 HELP_MSG = f'''Script to create an event on google calendar regarding your travel bookings.
-{os.path.basename(__file__)} [options]
+{os.path.basename(__file__)} [options, ...]
 
-All options are optional. If [REQUIRED] options are not specified or are specified incorrectly, they will be asked from you in an interactive mode. Here's a list:
+All options are optional. If [REQUIRED] options are not specified or are specified incorrectly, they will be asked from you in an interactive mode.
+For all options that take a value the value can be specified in 2 ways:
+--opt='value' or --opt 'value'
+
+Here's a list of all options:
 --help: Prints this help message and exits the program
 
 Any 2 of the 3 below are required. If all 3 are specified. Only --departure and --arrival values are considered
@@ -61,10 +77,13 @@ Any 2 of the 3 below are required. If all 3 are specified. Only --departure and 
 --arrival='YYYY-MM-DD HH:MM:SS' or --arrival='YYYY-MM-DD HH:MM:SS+HH:MM': [REQUIRED] Specifies the ending date and time of your journey along with utc offset if necessary.
 --duration='HH:MM': Specifies the duration of the journey
 
---color='color name'. Available options are: {COLORS}. Default is Banana.
+--color='color name' Available options are: {COLORS}. Default is Banana.
 
---type='type of travel'. This will appear in the title of the event as 'TYPE to LOCATION'
+--type='type of travel' This will appear in the title of the event as 'TYPE to DESTINATION'
 Eg: --type=Flight then title could be 'Flight to New Delhi'
+
+--from='boarding location' This will appear in the location section of the google event
+--to='destination' This will appear in the title of the event as 'TYPE to DESTINATION'
 '''
 
 PRETTY_DATETIME_FMT = '%A, %b %-d %Y %-I:%M%p'
@@ -185,10 +204,10 @@ def menu(items: Iterable[str], msg: str) -> int:
 class ValueFlag:
     _T = TypeVar('_T')
 
-    def __init__(self, name: str, val_err_msg: str, missing_err_msg: str, with_data: Callable[[str], _T], ask: Callable[[], _T], as_str: Callable[[Self], str], initial_val: _T | None = None):
+    def __init__(self, name: str, missing_msg: str, ask: Callable[[], _T], as_str: Callable[[Self], str], val_err_msg: str = '', with_data: Callable[[str], _T] = lambda data: data, initial_val: _T | None = None):
         self.flag = f'--{name}'
         self.val_err_msg = val_err_msg
-        self.missing_err_msg = missing_err_msg
+        self.missing_msg = missing_msg
         self.with_data = with_data
         self.ask = ask
         self.val: self._T | None = initial_val
@@ -198,7 +217,7 @@ class ValueFlag:
         return self.as_str(self)
 
 
-def parse_args(args: list[str]) -> tuple[datetime, datetime, int, str] | NoReturn:
+def parse_args(args: list[str]) -> tuple[datetime, datetime, int, str, str | None, str | None] | NoReturn:
     # Special case if --help is specified
     if args.count('--help') >= 1:
         print(HELP_MSG)
@@ -209,7 +228,7 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime, int, str] | NoRetur
             name='departure',
             val_err_msg=ARRIVAL_DEPARTURE_VAL_ERR_MSG.format(
                 'departure'),
-            missing_err_msg=ARRIVAL_DEPARTURE_MISSING_ERR_MSG.format(
+            missing_msg=ARRIVAL_DEPARTURE_MISSING_MSG.format(
                 'departure'),
             with_data=lambda data: datetime.fromisoformat(data).astimezone(),
             ask=lambda: ask_datetime('departure'),
@@ -220,7 +239,7 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime, int, str] | NoRetur
             name='arrival',
             val_err_msg=ARRIVAL_DEPARTURE_VAL_ERR_MSG.format(
                 'arrival'),
-            missing_err_msg=ARRIVAL_DEPARTURE_MISSING_ERR_MSG.format(
+            missing_msg=ARRIVAL_DEPARTURE_MISSING_MSG.format(
                 'arrival'),
             with_data=lambda data: datetime.fromisoformat(data).astimezone(),
             ask=lambda: ask_datetime('arrival'),
@@ -230,7 +249,7 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime, int, str] | NoRetur
         'duration': ValueFlag(
             name='duration',
             val_err_msg=DURATION_VAL_ERR_MSG,
-            missing_err_msg=DURATION_MISSING_ERR_MSG,
+            missing_msg=DURATION_MISSING_MSG,
             with_data=lambda data: timedelta(
                 hours=int(data[:2]), minutes=int(data[3:])),
             ask=ask_duration,
@@ -239,7 +258,7 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime, int, str] | NoRetur
         'color': ValueFlag(
             name='color',
             val_err_msg=COLOR_VAL_ERR_MSG,
-            missing_err_msg=COLOR_MISSING_ERR_MSG,
+            missing_msg=COLOR_MISSING_MSG,
             with_data=lambda data: COLORS.index(data.capitalize()) + 1,
             ask=lambda: menu(COLORS, 'Enter the index of your chosen color: '),
             as_str=lambda self: f'Color for event: {COLORS[self.val - 1]}',
@@ -247,12 +266,22 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime, int, str] | NoRetur
         ),
         'type': ValueFlag(
             name='type',
-            val_err_msg='',
-            missing_err_msg=TYPE_MISSING_ERR_MSG,
-            with_data=lambda data: data,
+            missing_msg=TYPE_MISSING_MSG,
             ask=lambda: input('Enter the type of travel this is: '),
-            as_str=lambda self: f'Title: {self.val} to location',
+            as_str=lambda self: self.val,
             initial_val='Trip',
+        ),
+        'from': ValueFlag(
+            name='from',
+            missing_msg=FROM_MISSING_MSG,
+            ask=lambda: input('Enter your boarding location: '),
+            as_str=lambda self: f'Boarding location: {self.val or 'Unknown'}',
+        ),
+        'to': ValueFlag(
+            name='to',
+            missing_msg=TO_MISSING_MSG,
+            ask=lambda: input('Enter your destination: '),
+            as_str=lambda self: f'Going to: {self.val or 'Unknown'}'
         )
     }
 
@@ -272,7 +301,7 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime, int, str] | NoRetur
                 if len(arg) == len(flag.flag):
                     # Cases where the flag is given but not its value
                     if len(args) - 1 <= i or args[i + 1].startswith('--'):
-                        print(flag.missing_err_msg)
+                        print(flag.missing_msg)
                         flag.val = flag.ask()
                     else:
                         next_accounted_for = True
@@ -299,13 +328,17 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime, int, str] | NoRetur
 Summary of your tickets...''')
 
         for flag in val_flags.values():
+            if flag.flag == '--type':
+                print(f'Title: {flag} to {val_flags['to'].val}')
+                continue
+
             print(flag)
 
         deets_ok = input(f'''{'-'*30}
 Is all this information alright? [Y/n]: ''')
 
         if deets_ok.lower() == 'y' or deets_ok == '':
-            return (val_flags['departure'].val, val_flags['arrival'].val, val_flags['color'].val, val_flags['type'].val)
+            return (val_flags['departure'].val, val_flags['arrival'].val, val_flags['color'].val, val_flags['type'].val, val_flags['from'].val, val_flags['to'].val)
         elif deets_ok.lower() == 'n':
             # Printing the choosing menu
             faulty_entry = menu(flags := list(val_flags.keys()),
@@ -327,12 +360,12 @@ Is all this information alright? [Y/n]: ''')
 
 def main():
     # First element in argv is the name of the script itself
-    departure, arrival, color, travel_type = parse_args(sys.argv[1:])
+    departure, arrival, color, travel_type, boarding_location, destination = parse_args(
+        sys.argv[1:])
 
     try:
-        service = init_service()
-        response = service.events().insert(calendarId='primary', body={
-            'summary': f'{travel_type} to location',
+        rq_body = {
+            'summary': f'{travel_type} to {destination or 'somewhere'}',
             'start': {
                 'dateTime': departure.isoformat()
             },
@@ -340,7 +373,12 @@ def main():
                 'dateTime': arrival.isoformat()
             },
             'colorId': str(color)
-        }).execute()
+        }
+        if boarding_location:
+            rq_body['location'] = boarding_location
+
+        service = init_service()
+        response = service.events().insert(calendarId='primary', body=rq_body).execute()
         print(f"Added event at {response['htmlLink']}")
 
     except HttpError as error:
