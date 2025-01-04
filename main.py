@@ -84,6 +84,8 @@ Eg: --type=Flight then title could be 'Flight to New Delhi'
 
 --from='boarding location' This will appear in the location section of the google event
 --to='destination' This will appear in the title of the event as 'TYPE to DESTINATION'
+
+--no-confirm Will not ask for confirmation after printing summary and will create event with given or default data.
 '''
 
 PRETTY_DATETIME_FMT = '%A, %b %-d %Y %-I:%M%p'
@@ -183,6 +185,12 @@ class ValueFlag:
         return self.as_str(self)
 
 
+class BoolFlag:
+    def __init__(self, name: str):
+        self.flag = f'--{name}'
+        self.val = False
+
+
 def menu(items: Iterable[str], msg: str) -> int:
     for i, item in enumerate(items):
         print(f'{i + 1}. {item.capitalize()}')
@@ -191,7 +199,7 @@ def menu(items: Iterable[str], msg: str) -> int:
                         constraint_err_msg=f'Please ensure 0 < input < {len(items) + 1}')
 
 
-def parse_args(args: list[str], val_flags: dict[str, ValueFlag]) -> None:
+def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dict[str, BoolFlag]) -> None:
     '''
     Goes through args passed by the user and modifies val_flags with any data
     found accordingly.
@@ -212,7 +220,8 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag]) -> None:
             print(f'Unrecognized option: {arg}. Exiting...')
             exit(-1)
 
-        if flag := val_flags.get(arg.split('=', maxsplit=1)[0][2:]):
+        flag_name = arg.split('=', maxsplit=1)[0][2:]
+        if flag := val_flags.get(flag_name):
             try:
                 # Value specified as --departure '2025-01-14'
                 if len(arg) == len(flag.flag):
@@ -231,12 +240,14 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag]) -> None:
             except ValueError:
                 print(flag.val_err_msg)
                 flag.val = flag.ask()
+        elif flag := bool_flags.get(flag_name):
+            flag.val = True
         else:
             print(f'Unrecognized option {arg}. Exiting...')
             exit(-1)
 
 
-def departure_arrival_duration_calc(val_flags: ValueFlag):
+def departure_arrival_duration_calc(val_flags: dict[str, ValueFlag]) -> None:
     '''
     Calculates or asks the required values from departure, arrival and duration
     to ensure all 3 are obtained
@@ -275,7 +286,7 @@ def departure_arrival_duration_calc(val_flags: ValueFlag):
             val_flags['departure'].val
 
 
-def summary_and_confirm(val_flags: dict[str, ValueFlag]) -> dict[str, ValueFlag]:
+def summary_and_confirm(val_flags: dict[str, ValueFlag], to_confirm: bool) -> None:
     # Summary printing and correcting erroneous data
     while True:
         print(f'''
@@ -288,12 +299,14 @@ Summary of your tickets...''')
                 continue
 
             print(flag)
+        print(f'{'-'*30}')
+        if not to_confirm:
+            return
 
-        deets_ok = input(f'''{'-'*30}
-Is all this information alright? [Y/n]: ''')
+        deets_ok = input('Is all this information alright? [Y/n]: ')
 
         if deets_ok.lower() == 'y' or deets_ok == '':
-            return val_flags
+            return
         elif deets_ok.lower() == 'n':
             # Printing the choosing menu
             faulty_entry = menu(flags := list(val_flags.keys()),
@@ -377,11 +390,15 @@ def main():
         )
     }
 
+    bool_flags = {
+        'no-confirm': BoolFlag('no-confirm')
+    }
+
     # All 3 function modify val_flags in place
-    parse_args(sys.argv[1:], val_flags)
+    parse_args(sys.argv[1:], val_flags, bool_flags)
     # Having any 2 out of departure, arrival or duration can used to calculate the third. This line does that
     departure_arrival_duration_calc(val_flags)
-    summary_and_confirm(val_flags)
+    summary_and_confirm(val_flags, not bool_flags['no-confirm'].val)
 
     try:
         rq_body = {
