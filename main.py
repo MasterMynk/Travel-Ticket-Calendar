@@ -1,12 +1,8 @@
-# TODO: Add a flag to dyanmically set location of token.json file
-# TODO: Remove the need for credentials.json file. Store the data in this python script itself
-
 import os.path
 import sys
 from datetime import datetime, timedelta
 from collections.abc import Callable
 from typing import TypeVar, NoReturn, Self, Iterable
-from functools import reduce
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
