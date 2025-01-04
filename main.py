@@ -86,6 +86,7 @@ Eg: --type=Flight then title could be 'Flight to New Delhi'
 --to='destination' This will appear in the title of the event as 'TYPE to DESTINATION'
 
 --no-confirm Will not ask for confirmation after printing summary and will create event with given or default data.
+--no-ask Nothing will be asked interactively. If there is insufficient data program will exit without creating event.
 '''
 
 PRETTY_DATETIME_FMT = '%A, %b %-d %Y %-I:%M%p'
@@ -199,7 +200,7 @@ def menu(items: Iterable[str], msg: str) -> int:
                         constraint_err_msg=f'Please ensure 0 < input < {len(items) + 1}')
 
 
-def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dict[str, BoolFlag]) -> None:
+def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dict[str, BoolFlag], to_ask: bool) -> None | NoReturn:
     '''
     Goes through args passed by the user and modifies val_flags with any data
     found accordingly.
@@ -228,6 +229,9 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dic
                     # Cases where the flag is given but not its value
                     if len(args) - 1 <= i or args[i + 1].startswith('--'):
                         print(flag.missing_msg)
+                        if not to_ask:
+                            exit(-1)
+
                         flag.val = flag.ask()
                     else:
                         next_accounted_for = True
@@ -239,6 +243,9 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dic
             # This ValueError will only occur when the specified data is garbled
             except ValueError:
                 print(flag.val_err_msg)
+                if not to_ask:
+                    exit(-1)
+
                 flag.val = flag.ask()
         elif flag := bool_flags.get(flag_name):
             flag.val = True
@@ -247,7 +254,7 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dic
             exit(-1)
 
 
-def departure_arrival_duration_calc(val_flags: dict[str, ValueFlag]) -> None:
+def departure_arrival_duration_calc(val_flags: dict[str, ValueFlag], to_ask: bool) -> None | NoReturn:
     '''
     Calculates or asks the required values from departure, arrival and duration
     to ensure all 3 are obtained
@@ -268,6 +275,9 @@ def departure_arrival_duration_calc(val_flags: dict[str, ValueFlag]) -> None:
     elif val_flags['arrival'].val and val_flags['duration'].val:
         val_flags['departure'].val = val_flags['arrival'].val - \
             val_flags['duration'].val
+    elif not to_ask:
+        print('Insufficient information. Any 2 of departure time, arrival time or duration required and can be supplied by using --departure, --arrival and --duration respectively.')
+        exit(-1)
     # If only one is present one more is asked for and then third is calculated
     elif val_flags['duration'].val:
         val_flags['departure'].val = val_flags['departure'].ask()
@@ -391,14 +401,17 @@ def main():
     }
 
     bool_flags = {
-        'no-confirm': BoolFlag('no-confirm')
+        'no-confirm': BoolFlag('no-confirm'),
+        'no-ask': BoolFlag('no-ask')
     }
 
     # All 3 function modify val_flags in place
-    parse_args(sys.argv[1:], val_flags, bool_flags)
+    parse_args(sys.argv[1:], val_flags, bool_flags,
+               not bool_flags['no-ask'].val)
     # Having any 2 out of departure, arrival or duration can used to calculate the third. This line does that
-    departure_arrival_duration_calc(val_flags)
-    summary_and_confirm(val_flags, not bool_flags['no-confirm'].val)
+    departure_arrival_duration_calc(val_flags, not bool_flags['no-ask'].val)
+    summary_and_confirm(val_flags, not (
+        bool_flags['no-confirm'].val or bool_flags['no-ask'].val))
 
     try:
         rq_body = {
