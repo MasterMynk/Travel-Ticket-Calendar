@@ -167,40 +167,6 @@ def ask_duration() -> timedelta:
             print(f'Invalid duration entered: {e}. Let us try again!')
 
 
-def departure_arrival_duration_calc(departure: datetime, ask_departure: Callable[[], datetime], arrival: datetime, ask_arrival: Callable[[], datetime], duration: timedelta) -> tuple[datetime, datetime, timedelta]:
-    if departure and arrival and duration:
-        print('--departure, --arrival and --duration all 3 specified. Only considering --departure and --arrival')
-        duration = arrival - departure
-    elif departure and arrival:
-        duration = arrival - departure
-    elif departure and duration:
-        arrival = departure + duration
-    elif arrival and duration:
-        departure = arrival - duration
-    elif duration:
-        departure = ask_departure()
-        arrival = departure + duration
-    else:
-        if departure:
-            arrival = ask_arrival()
-        elif arrival:
-            departure = ask_departure()
-        else:
-            departure = ask_departure()
-            arrival = ask_arrival()
-        duration = arrival - departure
-
-    return departure, arrival, duration
-
-
-def menu(items: Iterable[str], msg: str) -> int:
-    for i, item in enumerate(items):
-        print(f'{i + 1}. {item.capitalize()}')
-
-    return ensure_input(msg, constraint=lambda x: 1 <= x <= len(items),
-                        constraint_err_msg=f'Please ensure 0 < input < {len(items) + 1}')
-
-
 class ValueFlag:
     _T = TypeVar('_T')
 
@@ -217,12 +183,138 @@ class ValueFlag:
         return self.as_str(self)
 
 
-def parse_args(args: list[str]) -> tuple[datetime, datetime, int, str, str | None, str | None] | NoReturn:
+def menu(items: Iterable[str], msg: str) -> int:
+    for i, item in enumerate(items):
+        print(f'{i + 1}. {item.capitalize()}')
+
+    return ensure_input(msg, constraint=lambda x: 1 <= x <= len(items),
+                        constraint_err_msg=f'Please ensure 0 < input < {len(items) + 1}')
+
+
+def parse_args(args: list[str], val_flags: dict[str, ValueFlag]) -> None:
+    '''
+    Goes through args passed by the user and modifies val_flags with any data
+    found accordingly.
+    '''
+
     # Special case if --help is specified
     if args.count('--help') >= 1:
         print(HELP_MSG)
         exit(0)
 
+    next_accounted_for = False
+    for i, arg in enumerate(args):
+        if next_accounted_for:
+            next_accounted_for = False
+            continue
+
+        if not arg.startswith('--'):
+            print(f'Unrecognized option: {arg}. Exiting...')
+            exit(-1)
+
+        if flag := val_flags.get(arg.split('=', maxsplit=1)[0][2:]):
+            try:
+                # Value specified as --departure '2025-01-14'
+                if len(arg) == len(flag.flag):
+                    # Cases where the flag is given but not its value
+                    if len(args) - 1 <= i or args[i + 1].startswith('--'):
+                        print(flag.missing_msg)
+                        flag.val = flag.ask()
+                    else:
+                        next_accounted_for = True
+                        flag.val = flag.with_data(args[i + 1])
+                # Value specified as --departure='2025-01-14'
+                elif arg[len(flag.flag)] == '=':
+                    flag.val = flag.with_data(
+                        arg[len(flag.flag) + 1:])
+            # This ValueError will only occur when the specified data is garbled
+            except ValueError:
+                print(flag.val_err_msg)
+                flag.val = flag.ask()
+        else:
+            print(f'Unrecognized option {arg}. Exiting...')
+            exit(-1)
+
+
+def departure_arrival_duration_calc(val_flags: ValueFlag):
+    '''
+    Calculates or asks the required values from departure, arrival and duration
+    to ensure all 3 are obtained
+    '''
+
+    # If all 3 exist departure and arrival are prioritized so duration is re-calculated
+    if val_flags['departure'].val and val_flags['arrival'].val and val_flags['duration'].val:
+        print('--departure, --arrival and --duration all 3 specified. Only considering --departure and --arrival')
+        val_flags['duration'].val = val_flags['arrival'].val - \
+            val_flags['departure'].val
+    # If any 2 are present third is simply calculated
+    elif val_flags['departure'].val and val_flags['arrival'].val:
+        val_flags['duration'].val = val_flags['arrival'].val - \
+            val_flags['departure'].val
+    elif val_flags['departure'].val and val_flags['duration'].val:
+        val_flags['arrival'].val = val_flags['departure'].val + \
+            val_flags['duration'].val
+    elif val_flags['arrival'].val and val_flags['duration'].val:
+        val_flags['departure'].val = val_flags['arrival'].val - \
+            val_flags['duration'].val
+    # If only one is present one more is asked for and then third is calculated
+    elif val_flags['duration'].val:
+        val_flags['departure'].val = val_flags['departure'].ask()
+        val_flags['arrival'].val = val_flags['departure'].val + \
+            val_flags['duration'].val
+    else:
+        if val_flags['departure'].val:
+            val_flags['arrival'].val = val_flags['arrival'].ask()
+        elif val_flags['arrival'].val:
+            val_flags['departure'].val = val_flags['departure'].ask()
+        # If none were given then departure and arrival are asked for to calculate duration
+        else:
+            val_flags['departure'].val = val_flags['departure'].ask()
+            val_flags['arrival'].val = val_flags['arrival'].ask()
+        val_flags['duration'].val = val_flags['arrival'].val - \
+            val_flags['departure'].val
+
+
+def summary_and_confirm(val_flags: dict[str, ValueFlag]) -> dict[str, ValueFlag]:
+    # Summary printing and correcting erroneous data
+    while True:
+        print(f'''
+{'-'*30}
+Summary of your tickets...''')
+
+        for flag in val_flags.values():
+            if flag.flag == '--type':
+                print(f'Title: {flag} to {val_flags['to'].val}')
+                continue
+
+            print(flag)
+
+        deets_ok = input(f'''{'-'*30}
+Is all this information alright? [Y/n]: ''')
+
+        if deets_ok.lower() == 'y' or deets_ok == '':
+            return val_flags
+        elif deets_ok.lower() == 'n':
+            # Printing the choosing menu
+            faulty_entry = menu(flags := list(val_flags.keys()),
+                                msg='Enter index of incorrect entry: ') - 1
+
+            val_flags[flags[faulty_entry]
+                      ].val = val_flags[flags[faulty_entry]].ask()
+
+            # Changing one of the 3 values - departure, arrival or duration - must affect the another for them to remain in harmony
+            if flags[faulty_entry] == 'duration':
+                val_flags['arrival'].val = val_flags['departure'].val + \
+                    val_flags['duration'].val
+            elif flags[faulty_entry] in ['departure', 'arrival']:
+                val_flags['duration'].val = val_flags['arrival'].val - \
+                    val_flags['departure'].val
+        else:
+            print("Didn't get you. Try again.")
+
+
+def main():
+    # List of all options that take a value
     val_flags: dict[str, ValueFlag] = {
         'departure': ValueFlag(
             name='departure',
@@ -285,97 +377,25 @@ def parse_args(args: list[str]) -> tuple[datetime, datetime, int, str, str | Non
         )
     }
 
-    next_accounted_for = False
-    for i, arg in enumerate(args):
-        if next_accounted_for:
-            next_accounted_for = False
-            continue
-
-        if not arg.startswith('--'):
-            print(f'Unrecognized option: {arg}. Exiting...')
-            exit(-1)
-
-        if flag := val_flags.get(arg.split('=', maxsplit=1)[0][2:]):
-            try:
-                # Value specified as --departure '2025-01-14'
-                if len(arg) == len(flag.flag):
-                    # Cases where the flag is given but not its value
-                    if len(args) - 1 <= i or args[i + 1].startswith('--'):
-                        print(flag.missing_msg)
-                        flag.val = flag.ask()
-                    else:
-                        next_accounted_for = True
-                        flag.val = flag.with_data(args[i + 1])
-                # Value specified as --departure='2025-01-14'
-                elif arg[len(flag.flag)] == '=':
-                    flag.val = flag.with_data(
-                        arg[len(flag.flag) + 1:])
-            # This ValueError will only occur when the specified data is garbled
-            except ValueError:
-                print(flag.val_err_msg)
-                flag.val = flag.ask()
-        else:
-            print(f'Unrecognized option {arg}. Exiting...')
-            exit(-1)
-
-    val_flags['departure'].val, val_flags['arrival'].val, val_flags['duration'].val = departure_arrival_duration_calc(
-        val_flags['departure'].val, val_flags['departure'].ask, val_flags['arrival'].val, val_flags['arrival'].ask, val_flags['duration'].val)
-
-    # Summary printing and correcting erroneous data
-    while True:
-        print(f'''
-{'-'*30}
-Summary of your tickets...''')
-
-        for flag in val_flags.values():
-            if flag.flag == '--type':
-                print(f'Title: {flag} to {val_flags['to'].val}')
-                continue
-
-            print(flag)
-
-        deets_ok = input(f'''{'-'*30}
-Is all this information alright? [Y/n]: ''')
-
-        if deets_ok.lower() == 'y' or deets_ok == '':
-            return (val_flags['departure'].val, val_flags['arrival'].val, val_flags['color'].val, val_flags['type'].val, val_flags['from'].val, val_flags['to'].val)
-        elif deets_ok.lower() == 'n':
-            # Printing the choosing menu
-            faulty_entry = menu(flags := list(val_flags.keys()),
-                                msg='Enter index of incorrect entry: ') - 1
-
-            val_flags[flags[faulty_entry]
-                      ].val = val_flags[flags[faulty_entry]].ask()
-
-            # Changing one of the 3 values - departure, arrival or duration - must affect the another for them to remain in harmony
-            if flags[faulty_entry] == 'duration':
-                val_flags['arrival'].val = val_flags['departure'].val + \
-                    val_flags['duration'].val
-            elif flags[faulty_entry] in ['departure', 'arrival']:
-                val_flags['duration'].val = val_flags['arrival'].val - \
-                    val_flags['departure'].val
-        else:
-            print("Didn't get you. Try again.")
-
-
-def main():
-    # First element in argv is the name of the script itself
-    departure, arrival, color, travel_type, boarding_location, destination = parse_args(
-        sys.argv[1:])
+    # All 3 function modify val_flags in place
+    parse_args(sys.argv[1:], val_flags)
+    # Having any 2 out of departure, arrival or duration can used to calculate the third. This line does that
+    departure_arrival_duration_calc(val_flags)
+    summary_and_confirm(val_flags)
 
     try:
         rq_body = {
-            'summary': f'{travel_type} to {destination or 'somewhere'}',
+            'summary': f'{val_flags['type'].val} to {val_flags['to'].val or 'somewhere'}',
             'start': {
-                'dateTime': departure.isoformat()
+                'dateTime': val_flags['departure'].val.isoformat()
             },
             'end': {
-                'dateTime': arrival.isoformat()
+                'dateTime': val_flags['arrival'].val.isoformat()
             },
-            'colorId': str(color)
+            'colorId': str(val_flags['color'].val)
         }
-        if boarding_location:
-            rq_body['location'] = boarding_location
+        if val_flags['from'].val:
+            rq_body['location'] = val_flags['from'].val
 
         service = init_service()
         response = service.events().insert(calendarId='primary', body=rq_body).execute()
