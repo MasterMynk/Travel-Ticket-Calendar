@@ -200,7 +200,7 @@ def menu(items: Iterable[str], msg: str) -> int:
                         constraint_err_msg=f'Please ensure 0 < input < {len(items) + 1}')
 
 
-def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dict[str, BoolFlag], to_ask: bool) -> None | NoReturn:
+def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dict[str, BoolFlag]) -> None | NoReturn:
     '''
     Goes through args passed by the user and modifies val_flags with any data
     found accordingly.
@@ -211,15 +211,21 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dic
         print(HELP_MSG)
         exit(0)
 
+    # Checking for bool flags
+    for arg in args:
+        if not arg.startswith('--'):
+            print(f'Unrecognized option: {arg}. Exiting...')
+            exit(-1)
+
+        flag_name = arg.split('=', maxsplit=1)[0][2:]
+        if flag := bool_flags.get(flag_name):
+            flag.val = True
+
     next_accounted_for = False
     for i, arg in enumerate(args):
         if next_accounted_for:
             next_accounted_for = False
             continue
-
-        if not arg.startswith('--'):
-            print(f'Unrecognized option: {arg}. Exiting...')
-            exit(-1)
 
         flag_name = arg.split('=', maxsplit=1)[0][2:]
         if flag := val_flags.get(flag_name):
@@ -229,7 +235,7 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dic
                     # Cases where the flag is given but not its value
                     if len(args) - 1 <= i or args[i + 1].startswith('--'):
                         print(flag.missing_msg)
-                        if not to_ask:
+                        if bool_flags['no-ask'].val:
                             exit(-1)
 
                         flag.val = flag.ask()
@@ -243,12 +249,10 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dic
             # This ValueError will only occur when the specified data is garbled
             except ValueError:
                 print(flag.val_err_msg)
-                if not to_ask:
+                if bool_flags['no-ask'].val:
                     exit(-1)
 
                 flag.val = flag.ask()
-        elif flag := bool_flags.get(flag_name):
-            flag.val = True
         else:
             print(f'Unrecognized option {arg}. Exiting...')
             exit(-1)
@@ -406,8 +410,7 @@ def main():
     }
 
     # All 3 function modify val_flags in place
-    parse_args(sys.argv[1:], val_flags, bool_flags,
-               not bool_flags['no-ask'].val)
+    parse_args(sys.argv[1:], val_flags, bool_flags)
     # Having any 2 out of departure, arrival or duration can used to calculate the third. This line does that
     departure_arrival_duration_calc(val_flags, not bool_flags['no-ask'].val)
     summary_and_confirm(val_flags, not (
