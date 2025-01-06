@@ -2,15 +2,17 @@ import os.path
 import sys
 from datetime import datetime, timedelta
 from collections.abc import Callable
-from typing import TypeVar, NoReturn, Self, Iterable
+from typing import TypeVar, NoReturn, Self, Iterable, Any
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from googleapiclient.http import MediaFileUpload
 
-SCOPES = ['https://www.googleapis.com/auth/calendar']
+SCOPES = ['https://www.googleapis.com/auth/calendar',
+          'https://www.googleapis.com/auth/drive.file']
 
 ARRIVAL_DEPARTURE_VAL_ERR_MSG = '''
 --{0} value specified incorrectly.
@@ -63,9 +65,11 @@ This will be added to the title in the form: '[Trip] to Madgaon Railway Station'
 '''
 
 HELP_MSG = f'''Script to create an event on google calendar regarding your travel bookings.
-{os.path.basename(__file__)} [options, ...]
+{os.path.basename(__file__)} [location/to/ticket.pdf] [--departure='YYYY-MM-DD HH:MM:SS'] [--arrival 'YYYY-MM-DD HH:MM:SS'] ...
 
-All options are optional. If [REQUIRED] options are not specified or are specified incorrectly, they will be asked from you in an interactive mode.
+If ticket.pdf is provided then it will be uploaded to google drive and attached to the calendar event
+
+If [REQUIRED] options are not specified or are specified incorrectly, they will be asked from you in an interactive mode unless --no-ask is specified.
 For all options that take a value the value can be specified in 2 ways:
 --opt='value' or --opt 'value'
 
@@ -92,7 +96,7 @@ Eg: --type=Flight then title could be 'Flight to New Delhi'
 PRETTY_DATETIME_FMT = '%A, %b %-d %Y %-I:%M%p'
 
 
-def init_service(user_creds_file: str = 'token.json'):
+def init_service(user_creds_file: str = 'token.json') -> tuple[Any, Any]:
     creds = None
 
     if os.path.exists(user_creds_file):
@@ -110,7 +114,7 @@ def init_service(user_creds_file: str = 'token.json'):
         with open(user_creds_file, 'w') as token:
             token.write(creds.to_json())
 
-    return build('calendar', 'v3', credentials=creds)
+    return build('calendar', 'v3', credentials=creds), build('drive', 'v3', credentials=creds)
 
 
 def ensure_input(msg: str, default_val: int | None = None, constraint: Callable[[int], bool] = lambda _: True, constraint_err_msg: str = '') -> int:
@@ -170,6 +174,14 @@ def ask_duration() -> timedelta:
             print(f'Invalid duration entered: {e}. Let us try again!')
 
 
+def ensure_fp() -> str:
+    while True:
+        fp = input('Enter the filepath to the ticket pdf: ')
+        if os.path.isfile(fp):
+            return fp
+        print(f"{fp} doesn't exist. Enter a valid file path!!")
+
+
 class ValueFlag:
     _T = TypeVar('_T')
 
@@ -200,7 +212,7 @@ def menu(items: Iterable[str], msg: str) -> int:
                         constraint_err_msg=f'Please ensure 0 < input < {len(items) + 1}')
 
 
-def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dict[str, BoolFlag]) -> None | NoReturn:
+def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dict[str, BoolFlag]) -> str | None | NoReturn:
     '''
     Goes through args passed by the user and modifies val_flags with any data
     found accordingly.
@@ -213,19 +225,31 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dic
 
     # Checking for bool flags
     for arg in args:
-        if not arg.startswith('--'):
-            print(f'Unrecognized option: {arg}. Exiting...')
-            exit(-1)
-
-        flag_name = arg.split('=', maxsplit=1)[0][2:]
+        flag_name = arg[2:]
         if flag := bool_flags.get(flag_name):
             flag.val = True
 
+    # Getting the filepath for ticket if its specified
+    tkt_fp = None
+    if len(args) and not args[0].startswith('--'):
+        tkt_fp = args[0]
+        if not os.path.isfile(tkt_fp):
+            print(f"{tkt_fp} doesn't exist. Enter a valid file path!!")
+            if bool_flags['no-ask'].val:
+                exit(-1)
+            tkt_fp = ensure_fp()
+        args.pop(0)
+
+    # Checking for flags with value
     next_accounted_for = False
     for i, arg in enumerate(args):
         if next_accounted_for:
             next_accounted_for = False
             continue
+
+        if not arg.startswith('--'):
+            print(f'Unrecognized option: {arg}. Exiting...')
+            exit(-1)
 
         flag_name = arg.split('=', maxsplit=1)[0][2:]
         if flag := val_flags.get(flag_name):
@@ -253,9 +277,11 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dic
                     exit(-1)
 
                 flag.val = flag.ask()
-        else:
+        elif not bool_flags.get(flag_name):
             print(f'Unrecognized option {arg}. Exiting...')
             exit(-1)
+
+    return tkt_fp
 
 
 def departure_arrival_duration_calc(val_flags: dict[str, ValueFlag], to_ask: bool) -> None | NoReturn:
@@ -300,31 +326,37 @@ def departure_arrival_duration_calc(val_flags: dict[str, ValueFlag], to_ask: boo
             val_flags['departure'].val
 
 
-def summary_and_confirm(val_flags: dict[str, ValueFlag], to_confirm: bool) -> None:
-    # Summary printing and correcting erroneous data
+def summary_and_confirm(val_flags: dict[str, ValueFlag], tkt_fp: str | None, to_confirm: bool) -> str | None:
     while True:
+        # Summary printing
         print(f'''
 {'-'*30}
 Summary of your tickets...''')
 
         for flag in val_flags.values():
             if flag.flag == '--type':
-                print(f'Title: {flag} to {val_flags['to'].val}')
+                print(f'Title: {flag} to {val_flags['to'].val or 'somewhere'}')
                 continue
 
             print(flag)
+        print(f'Location of ticket pdf: {tkt_fp or 'Unspecified'}')
         print(f'{'-'*30}')
         if not to_confirm:
-            return
+            return tkt_fp
 
         deets_ok = input('Is all this information alright? [Y/n]: ')
 
         if deets_ok.lower() == 'y' or deets_ok == '':
-            return
+            return tkt_fp
         elif deets_ok.lower() == 'n':
             # Printing the choosing menu
-            faulty_entry = menu(flags := list(val_flags.keys()),
+            faulty_entry = menu(flags := list(val_flags.keys()) + ['Ticket file path'],
                                 msg='Enter index of incorrect entry: ') - 1
+
+            # User wants to change ticket file path
+            if faulty_entry >= len(flags) - 1:
+                tkt_fp = ensure_fp()
+                continue
 
             val_flags[flags[faulty_entry]
                       ].val = val_flags[flags[faulty_entry]].ask()
@@ -338,6 +370,44 @@ Summary of your tickets...''')
                     val_flags['departure'].val
         else:
             print("Didn't get you. Try again.")
+
+
+def upload_to_drive(drive: Any, tkt_fp: str) -> Any:
+    mime_type = 'application/pdf'
+    return drive.files().create(body={
+        'mimeType': mime_type,
+        'name': os.path.basename(tkt_fp),
+    }, media_body=MediaFileUpload(tkt_fp, mimetype=mime_type, resumable=True), fields='id,name,webViewLink,mimeType').execute()
+
+
+def create_event(calendar: Any, title: str, departure: datetime, arrival: datetime, color: int, location: str | None = None, attachments: list[Any] = []) -> Any:
+    rq_body = {
+        'summary': title,
+        'start': {
+            'dateTime': departure.isoformat()
+        },
+        'end': {
+            'dateTime': arrival.isoformat()
+        },
+        'colorId': str(color)
+    }
+    if location:
+        rq_body['location'] = location
+
+    if len(attachments) > 0:
+        rq_body['attachments'] = []
+    for file in attachments:
+        rq_body['attachments'].append(
+            {
+                'fileId': file['id'],
+                'title': file['name'],
+                'mimeType': file['mimeType'],
+                'fileUrl': file['webViewLink']
+            }
+        )
+
+    return calendar.events().insert(calendarId='primary', body=rq_body,
+                                    supportsAttachments=bool(len(attachments))).execute()
 
 
 def main():
@@ -410,28 +480,29 @@ def main():
     }
 
     # All 3 function modify val_flags in place
-    parse_args(sys.argv[1:], val_flags, bool_flags)
+    tkt_fp = parse_args(sys.argv[1:], val_flags, bool_flags)
     # Having any 2 out of departure, arrival or duration can used to calculate the third. This line does that
     departure_arrival_duration_calc(val_flags, not bool_flags['no-ask'].val)
-    summary_and_confirm(val_flags, not (
+    tkt_fp = summary_and_confirm(val_flags, tkt_fp, not (
         bool_flags['no-confirm'].val or bool_flags['no-ask'].val))
 
-    try:
-        rq_body = {
-            'summary': f'{val_flags['type'].val} to {val_flags['to'].val or 'somewhere'}',
-            'start': {
-                'dateTime': val_flags['departure'].val.isoformat()
-            },
-            'end': {
-                'dateTime': val_flags['arrival'].val.isoformat()
-            },
-            'colorId': str(val_flags['color'].val)
-        }
-        if val_flags['from'].val:
-            rq_body['location'] = val_flags['from'].val
 
-        service = init_service()
-        response = service.events().insert(calendarId='primary', body=rq_body).execute()
+    try:
+        calendar, drive = init_service()
+
+        if tkt_fp:
+            file = upload_to_drive(drive, tkt_fp)
+            print(
+                f'Ticket uploaded to your drive at {file['webViewLink']}')
+
+        response = create_event(calendar,
+                                title=f'{val_flags['type'].val} to {val_flags['to'].val or 'somewhere'}', departure=val_flags['departure'].val,
+                                arrival=val_flags['arrival'].val,
+                                color=val_flags['color'].val,
+                                location=val_flags['from'].val,
+                                attachments=[file] if tkt_fp else []
+                                )
+
         print(f"Added event at {response['htmlLink']}")
 
     except HttpError as error:
