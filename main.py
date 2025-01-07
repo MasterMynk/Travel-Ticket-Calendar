@@ -3,6 +3,10 @@ import sys
 from datetime import datetime, timedelta
 from collections.abc import Callable
 from typing import TypeVar, NoReturn, Self, Iterable, Any
+import re
+
+from pypdf import PdfReader
+import pypdf.errors
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -137,6 +141,20 @@ def ensure_input(msg: str, default_val: int | None = None, constraint: Callable[
             return data
 
 
+def ask_hour(verb: str) -> int:
+    # This is a function because it's used in read_irctc_tkt and ask_datetime
+    return ensure_input(f'Enter the hour of {verb} in 24-hour format: ',
+                        constraint=lambda hour: 0 <= hour < 24,
+                        constraint_err_msg='0 represents 12am and 23 represents 11pm. Enter hour accordingly!')
+
+
+def ask_minute(verb: str) -> int:
+    # This function also exists because of the same reason as ask_hour
+    return ensure_input(f'Enter the minute of {verb}: ',
+                        constraint=lambda minute: 0 <= minute < 60,
+                        constraint_err_msg='Please ensure 0 <= minute < 60')
+
+
 def ask_datetime(verb: str) -> datetime:
     print(f'Enter your {verb} date and time below')
     while True:
@@ -149,12 +167,8 @@ def ask_datetime(verb: str) -> datetime:
             constraint_err_msg='1 represents January and 12 represents December. Please enter month number accordingly!')
         date = ensure_input(
             f'Enter the date{{}}: ', int(datetime.now().strftime('%-d')))
-        hour = ensure_input(f'Enter the hour of {verb} in 24-hour format: ',
-                            constraint=lambda hour: 0 <= hour < 24,
-                            constraint_err_msg='0 represents 12am and 23 represents 11pm. Enter hour accordingly!')
-        minute = ensure_input(f'Enter the minute of {verb}: ',
-                              constraint=lambda minute: 0 <= minute < 60,
-                              constraint_err_msg='Please ensure 0 <= minute < 60')
+        hour = ask_hour(verb)
+        minute = ask_minute(verb)
 
         try:
             return datetime(year, month, date, hour, minute).astimezone()
@@ -182,6 +196,74 @@ def ensure_fp() -> str:
         print(f"{fp} doesn't exist. Enter a valid file path!!")
 
 
+def read_irctc_tkt(tkt_txt: str) -> tuple[datetime | None, datetime | None, str | None, str | None]:
+    '''
+    Reads a standard IRCTC ticket and returns departure and arrival date and time if available along with boarding location and destination
+    '''
+
+    IRCTC_TIME_SPECIFIER = '%H:%M'
+    IRCTC_DATE_SPECIFIER = '%d-%b-%Y'
+    IRCTC_DATETIME_SPECIFIER = f'{IRCTC_TIME_SPECIFIER} {IRCTC_DATE_SPECIFIER}'
+
+    departure, arrival = None, None
+
+    # An IRCTC ticket has the Start Date, Departure date and time and Arrival Date and time all specified in one line
+    line = re.search(
+        r'Start Date\* (?P<start>.*?)\s+Departure\* (?P<departure>.*?)\s+Arrival\* (?P<arrival>.*?)\s*\n', tkt_txt)
+    if line:
+        # First checking if departure date and time is available. If it is then checking start date won't be necessary
+        try:
+            if line.group('departure') != 'N.A.':
+                departure = datetime.strptime(
+                    line.group('departure'), IRCTC_DATETIME_SPECIFIER).astimezone()
+            else:
+                if line.group('start') != 'N.A.':
+                    print('Read departure date from ticket. Please enter the time:')
+
+                    departure = datetime.strptime(
+                        line.group('start'), IRCTC_DATE_SPECIFIER)
+                    departure += timedelta(hours=ask_hour('departure'),
+                                           minutes=ask_minute('departure'))
+                    departure = departure.astimezone()
+                else:
+                    print('Could not read departure date and time from ticket!')
+        except ValueError:
+            print('Could not read departure date and time from ticket!')
+
+        try:
+            if line.group('arrival') != 'N.A.':
+                arrival = datetime.strptime(
+                    line.group('arrival'), IRCTC_DATETIME_SPECIFIER).astimezone()
+            else:
+                print('Could not read arrival date and time from ticket!')
+        except ValueError:
+            print('Could not read arrival date and time from ticket!')
+    else:
+        print('Could not read any date and time data for arrival or departure from ticket!')
+
+    boarding, destination = None, None
+    location_info = re.search(
+        r'Booked\sFrom\s*To\s*(.*?)\s\(.*?\)\s*.*?\)\s*(.*?)\s\(.*?\)', tkt_txt, flags=re.DOTALL)
+
+    if location_info:
+        boarding, destination = location_info.group(1), location_info.group(2)
+    else:
+        print("Could not read boarding location or destination from ticket!")
+
+    return departure, arrival, boarding, destination
+
+
+def read_tkt(tkt_fp: str) -> tuple[datetime | None, datetime | None, str | None, str | None, str | None]:
+    try:
+        with PdfReader(tkt_fp) as tkt:
+            tkt_txt = tkt.pages[0].extract_text()
+            if tkt_txt.find('IRCTC') != -1:
+                return *read_irctc_tkt(tkt_txt), 'Train'
+    except pypdf.errors.PyPdfError:
+        print("There was a problem opening your ticket! Parsing ticket for journey data won't be possible.")
+    return None, None, None, None, None
+
+
 class ValueFlag:
     _T = TypeVar('_T')
 
@@ -191,11 +273,23 @@ class ValueFlag:
         self.missing_msg = missing_msg
         self.with_data = with_data
         self.ask = ask
-        self.val: self._T | None = initial_val
+        self._val: self._T | None = initial_val
         self.as_str = as_str
+        self._initial_val = initial_val
 
     def __str__(self):
         return self.as_str(self)
+
+    @property
+    def val(self):
+        return self._val
+
+    @val.setter
+    def val(self, data):
+        if data == None:
+            self._val = self._initial_val
+        else:
+            self._val = data
 
 
 class BoolFlag:
@@ -218,6 +312,9 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dic
     found accordingly.
     '''
 
+    # TODO: If departure is already supplied as a command line arg then don't ask for the time if date time is missing in ticket
+    # TODO: If there is an error in departure or arrival in the command line args but they're accquired from the ticket then don't bother the user
+
     # Special case if --help is specified
     if args.count('--help') >= 1:
         print(HELP_MSG)
@@ -233,11 +330,18 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dic
     tkt_fp = None
     if len(args) and not args[0].startswith('--'):
         tkt_fp = args[0]
+
         if not os.path.isfile(tkt_fp):
             print(f"{tkt_fp} doesn't exist. Enter a valid file path!!")
+
             if bool_flags['no-ask'].val:
                 exit(-1)
+
             tkt_fp = ensure_fp()
+
+        val_flags['departure'].val, val_flags['arrival'].val, val_flags['from'].val, val_flags['to'].val, val_flags['type'].val = read_tkt(
+            tkt_fp)
+
         args.pop(0)
 
     # Checking for flags with value
@@ -331,7 +435,7 @@ def summary_and_confirm(val_flags: dict[str, ValueFlag], tkt_fp: str | None, to_
         # Summary printing
         print(f'''
 {'-'*30}
-Summary of your tickets...''')
+Summary of your ticket...''')
 
         for flag in val_flags.values():
             if flag.flag == '--type':
@@ -485,7 +589,6 @@ def main():
     departure_arrival_duration_calc(val_flags, not bool_flags['no-ask'].val)
     tkt_fp = summary_and_confirm(val_flags, tkt_fp, not (
         bool_flags['no-confirm'].val or bool_flags['no-ask'].val))
-
 
     try:
         calendar, drive = init_service()
