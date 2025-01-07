@@ -196,7 +196,7 @@ def ensure_fp() -> str:
         print(f"{fp} doesn't exist. Enter a valid file path!!")
 
 
-def read_irctc_tkt(tkt_txt: str) -> tuple[datetime | None, datetime | None, str | None, str | None]:
+def read_irctc_tkt(tkt_txt: str, departure_flag_provided: bool) -> tuple[datetime | None, datetime | None, str | None, str | None]:
     '''
     Reads a standard IRCTC ticket and returns departure and arrival date and time if available along with boarding location and destination
     '''
@@ -216,7 +216,7 @@ def read_irctc_tkt(tkt_txt: str) -> tuple[datetime | None, datetime | None, str 
             if line.group('departure') != 'N.A.':
                 departure = datetime.strptime(
                     line.group('departure'), IRCTC_DATETIME_SPECIFIER).astimezone()
-            else:
+            elif not departure_flag_provided:
                 if line.group('start') != 'N.A.':
                     print('Read departure date from ticket. Please enter the time:')
 
@@ -253,12 +253,12 @@ def read_irctc_tkt(tkt_txt: str) -> tuple[datetime | None, datetime | None, str 
     return departure, arrival, boarding, destination
 
 
-def read_tkt(tkt_fp: str) -> tuple[datetime | None, datetime | None, str | None, str | None, str | None]:
+def read_tkt(tkt_fp: str, departure_flag_provided: bool) -> tuple[datetime | None, datetime | None, str | None, str | None, str | None]:
     try:
         with PdfReader(tkt_fp) as tkt:
             tkt_txt = tkt.pages[0].extract_text()
             if tkt_txt.find('IRCTC') != -1:
-                return *read_irctc_tkt(tkt_txt), 'Train'
+                return *read_irctc_tkt(tkt_txt, departure_flag_provided), 'Train'
     except pypdf.errors.PyPdfError:
         print("There was a problem opening your ticket! Parsing ticket for journey data won't be possible.")
     return None, None, None, None, None
@@ -312,9 +312,6 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dic
     found accordingly.
     '''
 
-    # TODO: If departure is already supplied as a command line arg then don't ask for the time if date time is missing in ticket
-    # TODO: If there is an error in departure or arrival in the command line args but they're accquired from the ticket then don't bother the user
-
     # Special case if --help is specified
     if args.count('--help') >= 1:
         print(HELP_MSG)
@@ -340,7 +337,8 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dic
             tkt_fp = ensure_fp()
 
         val_flags['departure'].val, val_flags['arrival'].val, val_flags['from'].val, val_flags['to'].val, val_flags['type'].val = read_tkt(
-            tkt_fp)
+            tkt_fp, bool(
+                len([1 for arg in args if arg.startswith('--departure')])))
 
         args.pop(0)
 
