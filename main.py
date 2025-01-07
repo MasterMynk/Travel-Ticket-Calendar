@@ -196,7 +196,7 @@ def ensure_fp() -> str:
         print(f"{fp} doesn't exist. Enter a valid file path!!")
 
 
-def read_irctc_tkt(tkt_txt: str, departure_flag_provided: bool) -> tuple[datetime | None, datetime | None, str | None, str | None]:
+def read_irctc_tkt(tkt_txt: str, departure_flag_provided: bool) -> tuple[datetime | None, datetime | None, timedelta | None, str | None, str | None]:
     '''
     Reads a standard IRCTC ticket and returns departure and arrival date and time if available along with boarding location and destination
     '''
@@ -250,18 +250,42 @@ def read_irctc_tkt(tkt_txt: str, departure_flag_provided: bool) -> tuple[datetim
     else:
         print("Could not read boarding location or destination from ticket!")
 
-    return departure, arrival, boarding, destination
+    return departure, arrival, arrival - departure if departure and arrival else None, boarding, destination
 
 
-def read_tkt(tkt_fp: str, departure_flag_provided: bool) -> tuple[datetime | None, datetime | None, str | None, str | None, str | None]:
+def read_mmt_tkt(tkt_txt: str) -> tuple[datetime, datetime, timedelta, str, str]:
+    departure_match = re.search(
+        r'\w{3} (?P<departure_time>\d{2}:\d{2}) hrs\n(?P<departure_date>.*)\n(?P<boarding1>.*)\n(?P<boarding2>.*)', tkt_txt)
+    dur_match = re.search(
+        r'(?P<year>\d{4}).*(?P<hours>\d{1,2})h (?P<minutes>\d{1,2})m duration', tkt_txt)
+
+    departure = datetime.strptime(departure_match.group(
+        'departure_time') + departure_match.group('departure_date') + dur_match.group('year'), '%H:%M%a, %d %b%Y')
+    boarding = f'{departure_match.group('boarding1')} {
+        departure_match.group('boarding2')}'
+
+    duration = timedelta(hours=int(dur_match.group(
+        'hours')), minutes=int(dur_match.group('minutes')))
+
+    dest_match = re.search(
+        r'\d{2}:\d{2} hrs \w{3}\n.*\n(?P<destination1>.*)\n(?P<destination2>.*)', tkt_txt)
+    destination = f'{dest_match.group('destination1')} {
+        dest_match.group('destination2')}'
+
+    return departure, departure + duration, duration, boarding, destination
+
+
+def read_tkt(tkt_fp: str, departure_flag_provided: bool) -> tuple[datetime | None, datetime | None, timedelta | None, str | None, str | None, str | None]:
     try:
         with PdfReader(tkt_fp) as tkt:
             tkt_txt = tkt.pages[0].extract_text()
             if tkt_txt.find('IRCTC') != -1:
                 return *read_irctc_tkt(tkt_txt, departure_flag_provided), 'Train'
+            elif re.search('[Aa]irport', tkt_txt):
+                return *read_mmt_tkt(tkt_txt), 'Flight'
     except pypdf.errors.PyPdfError:
         print("There was a problem opening your ticket! Parsing ticket for journey data won't be possible.")
-    return None, None, None, None, None
+    return None, None, None, None, None, None
 
 
 class ValueFlag:
@@ -336,7 +360,7 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dic
 
             tkt_fp = ensure_fp()
 
-        val_flags['departure'].val, val_flags['arrival'].val, val_flags['from'].val, val_flags['to'].val, val_flags['type'].val = read_tkt(
+        val_flags['departure'].val, val_flags['arrival'].val, val_flags['duration'].val, val_flags['from'].val, val_flags['to'].val, val_flags['type'].val = read_tkt(
             tkt_fp, bool(
                 len([1 for arg in args if arg.startswith('--departure')])))
 
