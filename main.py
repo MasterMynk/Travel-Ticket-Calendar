@@ -272,7 +272,7 @@ def read_mmt_tkt(tkt_txt: str) -> tuple[datetime, datetime, timedelta, str, str]
     destination = f'{dest_match.group('destination1')} {
         dest_match.group('destination2')}'
 
-    return departure, departure + duration, duration, boarding, destination
+    return departure.astimezone(), (departure + duration).astimezone(), duration, boarding, destination
 
 
 def read_tkt(tkt_fp: str, departure_flag_provided: bool) -> tuple[datetime | None, datetime | None, timedelta | None, str | None, str | None, str | None]:
@@ -285,6 +285,8 @@ def read_tkt(tkt_fp: str, departure_flag_provided: bool) -> tuple[datetime | Non
                 return *read_mmt_tkt(tkt_txt), 'Flight'
     except pypdf.errors.PyPdfError:
         print("There was a problem opening your ticket! Parsing ticket for journey data won't be possible.")
+    except:
+        print("Could interpret ticket content. Enter the details manually.")
     return None, None, None, None, None, None
 
 
@@ -632,6 +634,8 @@ def main():
 
     except HttpError as error:
         print(f'An error occurred: {error}')
+    except:
+        print(f"Some error occured. Could not create the event")
 
 
 if __name__ == '__main__':
