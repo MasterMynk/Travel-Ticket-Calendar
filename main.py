@@ -517,7 +517,24 @@ def create_event(calendar: Any, title: str, departure: datetime, arrival: dateti
         'end': {
             'dateTime': arrival.isoformat()
         },
-        'colorId': str(color)
+        'colorId': str(color),
+        'reminders': {
+            'useDefault': False,
+            'overrides': [
+                {
+                    'method': 'popup',
+                    'minutes': 30
+                },
+                {
+                    'method': 'popup',
+                    'minutes': 120
+                },
+                {
+                    'method': 'popup',
+                    'minutes': 10080  # 1 week
+                }
+            ]
+        }
     }
     if location:
         rq_body['location'] = location
