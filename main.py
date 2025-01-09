@@ -100,25 +100,34 @@ Eg: --type=Flight then title could be 'Flight to New Delhi'
 PRETTY_DATETIME_FMT = '%A, %b %-d %Y %-I:%M%p'
 
 
-def init_service(user_creds_file: str = 'token.json') -> tuple[Any, Any]:
+def init_service(user_creds_file: str = 'token.json') -> tuple[Any, Any, bool]:
+    to_upload_tkt = True
     creds = None
 
-    if os.path.exists(user_creds_file):
-        creds = Credentials.from_authorized_user_file(user_creds_file, SCOPES)
+    try:
+        if os.path.exists(user_creds_file):
+            creds = Credentials.from_authorized_user_file(
+                user_creds_file, SCOPES)
+    except:
+        os.remove(user_creds_file)
 
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            creds = InstalledAppFlow.from_client_secrets_file(
-                'credentials.json', SCOPES
-            ).run_local_server(port=0)
+    try:
+        if not creds or not creds.valid:
+            if creds and creds.expired and creds.refresh_token:
+                creds.refresh(Request())
+            else:
+                creds = InstalledAppFlow.from_client_secrets_file(
+                    'credentials.json', SCOPES
+                ).run_local_server(port=0)
 
         # Saving login tokens for next time
         with open(user_creds_file, 'w') as token:
             token.write(creds.to_json())
+    except Warning:
+        print('Required permissions not authorized! Exiting...')
+        exit(-1)
 
-    return build('calendar', 'v3', credentials=creds), build('drive', 'v3', credentials=creds)
+    return build('calendar', 'v3', credentials=creds), build('drive', 'v3', credentials=creds), to_upload_tkt
 
 
 def ensure_input(msg: str, default_val: int | None = None, constraint: Callable[[int], bool] = lambda _: True, constraint_err_msg: str = '') -> int:
@@ -632,9 +641,9 @@ def main():
         bool_flags['no-confirm'].val or bool_flags['no-ask'].val))
 
     try:
-        calendar, drive = init_service()
+        calendar, drive, to_upload_tkt = init_service()
 
-        if tkt_fp:
+        if to_upload_tkt and tkt_fp:
             file = upload_to_drive(drive, tkt_fp)
             print(
                 f'Ticket uploaded to your drive at {file['webViewLink']}')
@@ -644,7 +653,8 @@ def main():
                                 arrival=val_flags['arrival'].val,
                                 color=val_flags['color'].val,
                                 location=val_flags['from'].val,
-                                attachments=[file] if tkt_fp else []
+                                attachments=[
+                                    file] if to_upload_tkt and tkt_fp else []
                                 )
 
         print(f"Added event at {response['htmlLink']}")
