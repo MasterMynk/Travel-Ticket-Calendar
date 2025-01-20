@@ -10,6 +10,7 @@ from pypdf import PdfReader
 import pypdf.errors
 
 from google.auth.transport.requests import Request
+from google.auth.exceptions import RefreshError
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
@@ -650,29 +651,37 @@ def main():
     tkt_fp = summary_and_confirm(val_flags, tkt_fp, not (
         bool_flags['no-confirm'].val or bool_flags['no-ask'].val))
 
-    try:
-        calendar, drive, to_upload_tkt = init_service()
+    exit_by_default = False
+    while not exit_by_default:
+        exit_by_default = True
+        try:
+            calendar, drive, to_upload_tkt = init_service()
 
-        if to_upload_tkt and tkt_fp:
-            file = upload_to_drive(drive, tkt_fp)
+            if to_upload_tkt and tkt_fp:
+                file = upload_to_drive(drive, tkt_fp)
+                print(
+                    f'Ticket uploaded to your drive at {file['webViewLink']}')
+
+            response = create_event(calendar,
+                                    title=f'{val_flags['type'].val} to {val_flags['to'].val or 'somewhere'}', departure=val_flags['departure'].val,
+                                    arrival=val_flags['arrival'].val,
+                                    color=val_flags['color'].val,
+                                    location=val_flags['from'].val,
+                                    attachments=[
+                                        file] if to_upload_tkt and tkt_fp else []
+                                    )
+
+            print(f"Added event at {response['htmlLink']}")
+
+        except HttpError as error:
+            print(f'An error occurred: {error}')
+        except RefreshError as e:
             print(
-                f'Ticket uploaded to your drive at {file['webViewLink']}')
-
-        response = create_event(calendar,
-                                title=f'{val_flags['type'].val} to {val_flags['to'].val or 'somewhere'}', departure=val_flags['departure'].val,
-                                arrival=val_flags['arrival'].val,
-                                color=val_flags['color'].val,
-                                location=val_flags['from'].val,
-                                attachments=[
-                                    file] if to_upload_tkt and tkt_fp else []
-                                )
-
-        print(f"Added event at {response['htmlLink']}")
-
-    except HttpError as error:
-        print(f'An error occurred: {error}')
-    except:
-        print(f"Some error occured. Could not create the event")
+                f'Seems like your token.json file has expired. Deleting it and trying again.')
+            os.remove('token.json')
+            exit_by_default = False
+        except:
+            print(f"Some error occured. Could not create the event")
 
 
 if __name__ == '__main__':
