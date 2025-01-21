@@ -127,7 +127,7 @@ def init_service(user_creds_file: str = 'token.json') -> tuple[Any, Any, bool]:
             token.write(creds.to_json())
     except Warning:
         print('Required permissions not authorized! Exiting...')
-        exit(-1)
+        sys.exit(-1)
 
     return build('calendar', 'v3', credentials=creds), build('drive', 'v3', credentials=creds), to_upload_tkt
 
@@ -378,7 +378,7 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dic
             print(f"{tkt_fp} doesn't exist. Enter a valid file path!!")
 
             if bool_flags['no-ask'].val:
-                exit(-1)
+                sys.exit(-1)
 
             tkt_fp = ensure_fp()
 
@@ -397,7 +397,7 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dic
 
         if not arg.startswith('--'):
             print(f'Unrecognized option: {arg}. Exiting...')
-            exit(-1)
+            sys.exit(-1)
 
         flag_name = arg.split('=', maxsplit=1)[0][2:]
         if flag := val_flags.get(flag_name):
@@ -408,7 +408,7 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dic
                     if len(args) - 1 <= i or args[i + 1].startswith('--'):
                         print(flag.missing_msg)
                         if bool_flags['no-ask'].val:
-                            exit(-1)
+                            sys.exit(-1)
 
                         flag.val = flag.ask()
                     else:
@@ -422,12 +422,12 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dic
             except ValueError:
                 print(flag.val_err_msg)
                 if bool_flags['no-ask'].val:
-                    exit(-1)
+                    sys.exit(-1)
 
                 flag.val = flag.ask()
         elif not bool_flags.get(flag_name):
             print(f'Unrecognized option {arg}. Exiting...')
-            exit(-1)
+            sys.exit(-1)
 
     return tkt_fp
 
@@ -455,7 +455,7 @@ def departure_arrival_duration_calc(val_flags: dict[str, ValueFlag], to_ask: boo
             val_flags['duration'].val
     elif not to_ask:
         print('Insufficient information. Any 2 of departure time, arrival time or duration required and can be supplied by using --departure, --arrival and --duration respectively.')
-        exit(-1)
+        sys.exit(-1)
     # If only one is present one more is asked for and then third is calculated
     elif val_flags['duration'].val:
         val_flags['departure'].val = val_flags['departure'].ask()
@@ -575,6 +575,32 @@ def create_event(calendar: Any, title: str, departure: datetime, arrival: dateti
                                     supportsAttachments=bool(len(attachments))).execute()
 
 
+def check_existing_trip(calendar: Any, departure: datetime, arrival: datetime):
+    events = calendar.events().list(calendarId="primary",
+                                    timeMin=(
+                                        departure - timedelta(seconds=1)).isoformat(),
+                                    timeMax=(
+                                        arrival + timedelta(seconds=1)).isoformat(),
+                                    maxResults=10, singleEvents=True, orderBy='startTime').execute()['items']
+    for ev in events:
+        if (dep := ev['start'].get('dateTime')) and (arr := ev['end'].get('dateTime')) and datetime.fromisoformat(dep) == departure and datetime.fromisoformat(arr) == arrival:
+            return ev
+    return None
+
+
+def get_confirmation(msg: str, yes_default: bool) -> bool:
+    while True:
+        resp = input(f'{msg} [{'Y/n' if yes_default else 'y/N'}]: ')
+        if resp == '':
+            return yes_default
+        resp = resp.lower()
+        if resp == 'y':
+            return True
+        if resp == 'n':
+            return False
+        print("Didn't get you. Try again.")
+
+
 def main():
     # List of all options that take a value
     val_flags: dict[str, ValueFlag] = {
@@ -662,14 +688,28 @@ def main():
                 print(
                     f'Ticket uploaded to your drive at {file['webViewLink']}')
 
-            response = create_event(calendar,
-                                    title=f'{val_flags['type'].val} to {val_flags['to'].val or 'somewhere'}', departure=val_flags['departure'].val,
-                                    arrival=val_flags['arrival'].val,
-                                    color=val_flags['color'].val,
-                                    location=val_flags['from'].val,
-                                    attachments=[
-                                        file] if to_upload_tkt and tkt_fp else []
-                                    )
+            if not bool_flags['no-ask'].val and (ev := check_existing_trip(calendar, val_flags['departure'].val, val_flags['arrival'].val)) and get_confirmation('Do you want to update this event itself? ', True):
+                if to_upload_tkt and tkt_fp:
+                    if ev.get('attachments') == None:
+                        ev['attachments'] = []
+                    ev['attachments'].append({
+                        'fileId': file['id'],
+                        'title': file['name'],
+                        'mimeType': file['mimeType'],
+                        'fileUrl': file['webViewLink']
+                    })
+
+                response = calendar.events().update(
+                    calendarId='primary', eventId=ev['id'], body=ev, supportsAttachments=True).execute()
+            else:
+                response = create_event(calendar,
+                                        title=f'{val_flags['type'].val} to {val_flags['to'].val or 'somewhere'}', departure=val_flags['departure'].val,
+                                        arrival=val_flags['arrival'].val,
+                                        color=val_flags['color'].val,
+                                        location=val_flags['from'].val,
+                                        attachments=[
+                                            file] if to_upload_tkt and tkt_fp else []
+                                        )
 
             print(f"Added event at {response['htmlLink']}")
 
