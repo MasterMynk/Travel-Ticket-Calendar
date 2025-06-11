@@ -2,12 +2,8 @@ import os.path
 import sys
 from datetime import datetime, timedelta
 from collections.abc import Callable
-from typing import TypeVar, NoReturn, Self, Iterable, Any
-import re
+from typing import NoReturn, Iterable, Any
 import sys
-
-from pypdf import PdfReader
-import pypdf.errors
 
 from google.auth.transport.requests import Request
 from google.auth.exceptions import RefreshError
@@ -17,14 +13,17 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from googleapiclient.http import MediaFileUpload
 
+from flags import *
+from ticket_parsers import read_tkt
+
 SCOPES = ['https://www.googleapis.com/auth/calendar',
           'https://www.googleapis.com/auth/drive.file']
 
-ARRIVAL_DEPARTURE_VAL_ERR_MSG = '''
+ARRIVAL_DEP_VAL_ERR_MSG = '''
 --{0} value specified incorrectly.
 Correct format is YYYY-MM-DD HH:MM:SS and optionally YYYY-MM-DD HH:MM:SS+HH:MM to specify timezone.
 '''
-ARRIVAL_DEPARTURE_MISSING_MSG = '''
+ARRIVAL_DEP_MISSING_MSG = '''
 Date and time value for --{0} missing.
 You can specify it with --{0}='YYYY-MM-DD HH:MM:SS' or --{0}='YYYY-MM-DD HH:MM:SS+HH:MM' to specify timezone
 or specify it by doing --{0} 'YYYY-MM-DD HH:MM:SS' or --{0} 'YYYY-MM-DD HH:MM:SS+HH:MM'.
@@ -205,143 +204,6 @@ def ensure_fp() -> str:
         if os.path.isfile(fp):
             return fp
         print(f"{fp} doesn't exist. Enter a valid file path!!")
-
-
-def read_irctc_tkt(tkt_txt: str, departure_flag_provided: bool) -> tuple[datetime | None, datetime | None, timedelta | None, str | None, str | None]:
-    '''
-    Reads a standard IRCTC ticket and returns departure and arrival date and time if available along with boarding location and destination
-    '''
-
-    IRCTC_TIME_SPECIFIER = '%H:%M'
-    IRCTC_DATE_SPECIFIER = '%d-%b-%Y'
-    IRCTC_DATETIME_SPECIFIER = f'{IRCTC_TIME_SPECIFIER} {IRCTC_DATE_SPECIFIER}'
-
-    departure, arrival = None, None
-
-    # An IRCTC ticket has the Start Date, Departure date and time and Arrival Date and time all specified in one line
-    line = re.search(
-        r'Start Date\* (?P<start>.*?)\s+Departure\* (?P<departure>.*?)\s+Arrival\* (?P<arrival>.*?)\s*\n', tkt_txt)
-    if line:
-        # First checking if departure date and time is available. If it is then checking start date won't be necessary
-        try:
-            if line.group('departure') != 'N.A.':
-                departure = datetime.strptime(
-                    line.group('departure'), IRCTC_DATETIME_SPECIFIER).astimezone()
-            elif not departure_flag_provided:
-                if line.group('start') != 'N.A.':
-                    print('Read departure date from ticket. Please enter the time:')
-
-                    departure = datetime.strptime(
-                        line.group('start'), IRCTC_DATE_SPECIFIER)
-                    departure += timedelta(hours=ask_hour('departure'),
-                                           minutes=ask_minute('departure'))
-                    departure = departure.astimezone()
-                else:
-                    print('Could not read departure date and time from ticket!')
-        except ValueError:
-            print('Could not read departure date and time from ticket!')
-
-        try:
-            if line.group('arrival') != 'N.A.':
-                arrival = datetime.strptime(
-                    line.group('arrival'), IRCTC_DATETIME_SPECIFIER).astimezone()
-            else:
-                print('Could not read arrival date and time from ticket!')
-        except ValueError:
-            print('Could not read arrival date and time from ticket!')
-    else:
-        print('Could not read any date and time data for arrival or departure from ticket!')
-
-    boarding, destination = None, None
-    location_info = re.search(
-        r'Booked\sFrom\s*To\s*(.*?)\s\(.*?\)\s*.*?\)\s*(.*?)\s\(.*?\)', tkt_txt, flags=re.DOTALL)
-
-    if location_info:
-        boarding, destination = location_info.group(1), location_info.group(2)
-    else:
-        print("Could not read boarding location or destination from ticket!")
-
-    return departure, arrival, arrival - departure if departure and arrival else None, boarding, destination
-
-
-def read_mmt_tkt(tkt_txt: str) -> tuple[datetime, datetime, timedelta, str, str]:
-    departure_match = re.search(
-        r'\w{3} (?P<departure_time>\d{2}:\d{2}) hrs\n(?P<departure_date>.*)\n(?P<boarding1>.*)\n(?P<boarding2>.*)', tkt_txt)
-    dur_match = re.search(
-        r'(?P<year>\d{4}).*(?P<hours>\d{1,2})h (?P<minutes>\d{1,2})m duration', tkt_txt)
-
-    departure = datetime.strptime(departure_match.group(
-        'departure_time') + departure_match.group('departure_date') + dur_match.group('year'), '%H:%M%a, %d %b%Y')
-    boarding = f'{departure_match.group('boarding1')} {
-        departure_match.group('boarding2')}'
-
-    duration = timedelta(hours=int(dur_match.group(
-        'hours')), minutes=int(dur_match.group('minutes')))
-
-    dest_match = re.search(
-        r'\d{2}:\d{2} hrs \w{3}\n.*\n(?P<destination1>.*)\n(?P<destination2>.*)', tkt_txt)
-    destination = f'{dest_match.group('destination1')} {
-        dest_match.group('destination2')}'
-
-    return departure.astimezone(), (departure + duration).astimezone(), duration, boarding, destination
-
-
-def read_akasa_boarding_pass(tkt_txt: str) -> tuple[datetime, None, None, str, str]:
-    locations = re.search(
-        r'From\s*:\s*(?P<departure>.*)\nTo\s*:\s*(?P<destination>.*)', tkt_txt)
-    departure = re.search(
-        r'Date\s:\s(?P<date>.*)\sDeparture\s:\s(?P<time>.*)', tkt_txt)
-    return datetime.strptime(departure.group('date') + departure.group('time'), '%d %b %Y%H:%M').astimezone(), None, None, locations.group('departure'), locations.group('destination')
-
-def read_tkt(tkt_fp: str, departure_flag_provided: bool) -> tuple[datetime | None, datetime | None, timedelta | None, str | None, str | None, str | None]:
-    try:
-        with PdfReader(tkt_fp) as tkt:
-            tkt_txt = tkt.pages[0].extract_text()
-            if tkt_txt.find('Web Boarding Pass') != -1 and tkt_txt.find('Akasa Air') != -1:
-                return *read_akasa_boarding_pass(tkt_txt), 'Flight'
-            elif tkt_txt.find('IRCTC') != -1:
-                return *read_irctc_tkt(tkt_txt, departure_flag_provided), 'Train'
-            elif re.search('[Aa]irport', tkt_txt):
-                return *read_mmt_tkt(tkt_txt), 'Flight'
-    except pypdf.errors.PyPdfError:
-        print("There was a problem opening your ticket! Parsing ticket for journey data won't be possible.")
-    except:
-        print("Couldn't interpret ticket content. Enter the details manually.")
-    return None, None, None, None, None, None
-
-
-class ValueFlag:
-    _T = TypeVar('_T')
-
-    def __init__(self, name: str, missing_msg: str, ask: Callable[[], _T], as_str: Callable[[Self], str], val_err_msg: str = '', with_data: Callable[[str], _T] = lambda data: data, initial_val: _T | None = None):
-        self.flag = f'--{name}'
-        self.val_err_msg = val_err_msg
-        self.missing_msg = missing_msg
-        self.with_data = with_data
-        self.ask = ask
-        self._val: self._T | None = initial_val
-        self.as_str = as_str
-        self._initial_val = initial_val
-
-    def __str__(self):
-        return self.as_str(self)
-
-    @property
-    def val(self):
-        return self._val
-
-    @val.setter
-    def val(self, data):
-        if data == None:
-            self._val = self._initial_val
-        else:
-            self._val = data
-
-
-class BoolFlag:
-    def __init__(self, name: str):
-        self.flag = f'--{name}'
-        self.val = False
 
 
 def menu(items: Iterable[str], msg: str) -> int:
@@ -606,25 +468,25 @@ def main():
     val_flags: dict[str, ValueFlag] = {
         'departure': ValueFlag(
             name='departure',
-            val_err_msg=ARRIVAL_DEPARTURE_VAL_ERR_MSG.format(
+            val_err_msg=ARRIVAL_DEP_VAL_ERR_MSG.format(
                 'departure'),
-            missing_msg=ARRIVAL_DEPARTURE_MISSING_MSG.format(
+            missing_msg=ARRIVAL_DEP_MISSING_MSG.format(
                 'departure'),
             with_data=lambda data: datetime.fromisoformat(data).astimezone(),
             ask=lambda: ask_datetime('departure'),
-            as_str=lambda self: f'Departure time: {
-                self.val.strftime(PRETTY_DATETIME_FMT)}'
+            as_str=lambda this: f'Departure time: {
+                this.val.strftime(PRETTY_DATETIME_FMT)}'
         ),
         'arrival': ValueFlag(
             name='arrival',
-            val_err_msg=ARRIVAL_DEPARTURE_VAL_ERR_MSG.format(
+            val_err_msg=ARRIVAL_DEP_VAL_ERR_MSG.format(
                 'arrival'),
-            missing_msg=ARRIVAL_DEPARTURE_MISSING_MSG.format(
+            missing_msg=ARRIVAL_DEP_MISSING_MSG.format(
                 'arrival'),
             with_data=lambda data: datetime.fromisoformat(data).astimezone(),
             ask=lambda: ask_datetime('arrival'),
-            as_str=lambda self: f'Arrival time: {
-                self.val.strftime(PRETTY_DATETIME_FMT)}'
+            as_str=lambda this: f'Arrival time: {
+                this.val.strftime(PRETTY_DATETIME_FMT)}'
         ),
         'duration': ValueFlag(
             name='duration',
@@ -633,7 +495,7 @@ def main():
             with_data=lambda data: timedelta(
                 hours=int(data[:2]), minutes=int(data[3:])),
             ask=ask_duration,
-            as_str=lambda self: f'Duration of journey: {self.val}'
+            as_str=lambda this: f'Duration of journey: {this.val}'
         ),
         'color': ValueFlag(
             name='color',
@@ -641,27 +503,27 @@ def main():
             missing_msg=COLOR_MISSING_MSG,
             with_data=lambda data: COLORS.index(data.capitalize()) + 1,
             ask=lambda: menu(COLORS, 'Enter the index of your chosen color: '),
-            as_str=lambda self: f'Color for event: {COLORS[self.val - 1]}',
+            as_str=lambda this: f'Color for event: {COLORS[this.val - 1]}',
             initial_val=COLORS.index('Banana') + 1
         ),
         'type': ValueFlag(
             name='type',
             missing_msg=TYPE_MISSING_MSG,
             ask=lambda: input('Enter the type of travel this is: '),
-            as_str=lambda self: self.val,
+            as_str=lambda this: this.val,
             initial_val='Trip',
         ),
         'from': ValueFlag(
             name='from',
             missing_msg=FROM_MISSING_MSG,
             ask=lambda: input('Enter your boarding location: '),
-            as_str=lambda self: f'Boarding location: {self.val or 'Unknown'}',
+            as_str=lambda this: f'Boarding location: {this.val or 'Unknown'}',
         ),
         'to': ValueFlag(
             name='to',
             missing_msg=TO_MISSING_MSG,
             ask=lambda: input('Enter your destination: '),
-            as_str=lambda self: f'Going to: {self.val or 'Unknown'}'
+            as_str=lambda this: f'Going to: {this.val or 'Unknown'}'
         )
     }
 
