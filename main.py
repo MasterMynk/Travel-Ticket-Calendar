@@ -245,8 +245,7 @@ def parse_args(args: list[str], val_flags: dict[str, ValueFlag], bool_flags: dic
             tkt_fp = ensure_fp()
 
         val_flags['departure'].val, val_flags['arrival'].val, val_flags['duration'].val, val_flags['from'].val, val_flags['to'].val, val_flags['type'].val = read_tkt(
-            tkt_fp, bool(
-                len([1 for arg in args if arg.startswith('--departure')])))
+            tkt_fp)
 
         args.pop(0)
 

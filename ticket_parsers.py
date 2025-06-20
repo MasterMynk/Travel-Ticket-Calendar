@@ -1,9 +1,11 @@
 from datetime import datetime, timedelta
 import re
+from functools import reduce
 
 from pypdf import PdfReader
 import pypdf.errors
 
+import sys
 
 def read_irctc_tkt(tkt_txt: str) -> tuple[datetime | None, datetime | None, timedelta | None, str | None, str | None]:
     '''
@@ -83,16 +85,32 @@ def read_akasa_boarding_pass(tkt_txt: str) -> tuple[datetime, None, None, str, s
     return datetime.strptime(departure.group('date') + departure.group('time'), '%d %b %Y%H:%M').astimezone(), None, None, locations.group('departure'), locations.group('destination')
 
 
-def read_tkt(tkt_fp: str, departure_flag_provided: bool) -> tuple[datetime | None, datetime | None, timedelta | None, str | None, str | None, str | None]:
+def read_akasa_tkt(tkt_txt: str) -> tuple[datetime, datetime, timedelta, str, str]:
+    matches = re.search(
+        r"Baggage Allowance:.*\n(?P<boarding>.*\n.*)\n(?P<departure>.*\n.*)\n.*\n.*\n(?P<destination>.*\n.*)\n(?P<arrival>.*\n.*)", tkt_txt)
+
+    departure = datetime.strptime(matches.group(
+        "departure").replace('\n', ' '), "%d %b, %Y %H:%M").astimezone()
+    arrival = datetime.strptime(
+        matches.group("arrival").replace('\n', ' '), "%d %b, %Y %H:%M").astimezone()
+
+    return departure, arrival, arrival - departure, matches.group("boarding").replace('\n', ' '), matches.group("destination").replace('\n', ' ')
+
+
+def read_tkt(tkt_fp: str) -> tuple[datetime | None, datetime | None, timedelta | None, str | None, str | None, str | None]:
     try:
         with PdfReader(tkt_fp) as tkt:
-            tkt_txt = tkt.pages[0].extract_text()
+            tkt_txt = reduce(lambda txt, page: txt +
+                             page.extract_text(), tkt.pages, "")
             if tkt_txt.find('Web Boarding Pass') != -1 and tkt_txt.find('Akasa Air') != -1:
                 return *read_akasa_boarding_pass(tkt_txt), 'Flight'
             elif tkt_txt.find('IRCTC') != -1:
                 return *read_irctc_tkt(tkt_txt), 'Train'
+            elif tkt_txt.find('SNV Aviation Private Limited'):
+                return *read_akasa_tkt(tkt_txt), 'Flight'
             elif re.search('[Aa]irport', tkt_txt):
                 return *read_mmt_tkt(tkt_txt), 'Flight'
+            sys.exit(0)
     except pypdf.errors.PyPdfError:
         print("There was a problem opening your ticket! Parsing ticket for journey data won't be possible.")
     except:
