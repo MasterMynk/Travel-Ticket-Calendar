@@ -549,7 +549,7 @@ def main():
                 print(
                     f'Ticket uploaded to your drive at {file['webViewLink']}')
 
-            if not bool_flags['no-ask'].val and (ev := check_existing_trip(calendar, val_flags['departure'].val, val_flags['arrival'].val)) and get_confirmation('Do you want to update this event itself? ', True):
+            if not bool_flags['no-ask'].val and (ev := check_existing_trip(calendar, val_flags['departure'].val, val_flags['arrival'].val)) and ev['eventType'] != "fromGmail" and get_confirmation('Do you want to update this event itself? ', True):
                 if to_upload_tkt and tkt_fp:
                     if ev.get('attachments') == None:
                         ev['attachments'] = []
